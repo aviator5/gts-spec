@@ -1,12 +1,28 @@
 #
 # Test dependencies for the GTS specification test suite.
 #
-# NOTE:
-# - The tests currently use `httprunner`, which depends on `pydantic` v1.
-# - On Python 3.12, older `pydantic` v1 releases may crash during import with:
-#   "ForwardRef._evaluate() missing 1 required keyword-only argument: 'recursive_guard'"
-#   (because Python 3.12 changed the ForwardRef API).
-# - Pin `pydantic` to a Python-3.12-compatible v1 range to keep tests importable.
+# Supports Python 3.9 - 3.14.
 #
-httprunner
+# NOTE:
+# - `httprunner 4.x` declares `pydantic>=1.8,<1.9`, but pydantic 1.8.x is
+#   incompatible with Python >=3.12 (ForwardRef API changes) and >=3.14
+#   (type-inference failures).
+# - Pydantic 1.10.x is backwards-compatible with 1.8.x at the API level, so
+#   we override the pin here.
+# - httprunner is installed with --no-deps in the Makefile to sidestep the
+#   pip resolver conflict; the transitive deps it needs are listed below.
+#
+# -- httprunner transitive deps (version-compatible overrides) ---------------
 pydantic>=1.10.13,<2
+PyYAML>=6.0.2
+black>=22.3.0
+Brotli>=1.0.9
+jinja2>=3.0.3
+jmespath>=0.9.5
+loguru>=0.4.1
+pytest
+pytest-html
+requests>=2.22.0
+sentry-sdk
+toml
+urllib3
