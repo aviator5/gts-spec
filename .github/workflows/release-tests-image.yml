@@ -1,0 +1,129 @@
+name: Release Tests Image
+
+# Publishes the gts-spec test runner image to GHCR on every semver tag.
+# Tag format: vMAJOR.MINOR.PATCH (e.g. v0.11.3).
+# MAJOR.MINOR must match the spec version declared in README.md.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write   # create GitHub Release
+  packages: write   # push to ghcr.io
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Only publish from the canonical repository, never from forks.
+    if: github.repository == 'GlobalTypeSystem/gts-spec'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          # Defense in depth: don't leave the GITHUB_TOKEN in .git/config.
+          # The workflow doesn't currently upload artifacts or cache .git,
+          # but this guards against future modifications that might.
+          persist-credentials: false
+
+      - name: Verify spec version matches tag
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"          # v0.11.3 or v0.11.3-rc.1
+          VERSION="${TAG#v}"                      # 0.11.3   or 0.11.3-rc.1
+          # Extract leading "MAJOR.MINOR" — anchored at the start so any patch
+          # and/or prerelease suffix is ignored (e.g. 0.11.3-rc.1 -> 0.11).
+          MAJOR_MINOR=$(printf '%s' "$VERSION" | grep -oE '^[0-9]+\.[0-9]+' || true)
+          if [ -z "${MAJOR_MINOR:-}" ]; then
+            echo "::error::Tag $TAG does not start with MAJOR.MINOR"
+            exit 1
+          fi
+
+          # The canonical spec version is the machine-readable marker in README.md:
+          #   <!-- gts-spec-version: X.Y -->
+          # The human-readable "**VERSION**" line below it is for readers only and
+          # may be reworded freely.
+          SPEC_VERSION=$(grep -oE '<!-- gts-spec-version: [0-9]+\.[0-9]+ -->' README.md \
+            | grep -oE '[0-9]+\.[0-9]+')
+
+          if [ -z "${SPEC_VERSION:-}" ]; then
+            echo "::error file=README.md::Missing or malformed '<!-- gts-spec-version: X.Y -->' marker in README.md"
+            exit 1
+          fi
+
+          MARKER_COUNT=$(grep -cE '<!-- gts-spec-version: [0-9]+\.[0-9]+ -->' README.md)
+          if [ "$MARKER_COUNT" -ne 1 ]; then
+            echo "::error file=README.md::Expected exactly one gts-spec-version marker in README.md, found $MARKER_COUNT"
+            exit 1
+          fi
+
+          echo "Tag:                  $TAG"
+          echo "Tag major.minor:      $MAJOR_MINOR"
+          echo "README spec version:  $SPEC_VERSION"
+
+          if [ "$MAJOR_MINOR" != "$SPEC_VERSION" ]; then
+            echo "::error::Tag $TAG (major.minor=$MAJOR_MINOR) does not match README spec version $SPEC_VERSION"
+            exit 1
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
+        with:
+          images: ghcr.io/globaltypesystem/gts-spec-tests
+          # `latest` is intentionally NOT set automatically: backport patches to
+          # older spec lines (e.g. v0.9.4 cut from release/v0.9 while main is at
+          # 0.11) would otherwise silently move `latest` backwards. Consumers
+          # should pin to `vX.Y.Z` for reproducibility or use the rolling
+          # `vX.Y` tag for the freshest patch of a given spec version.
+          tags: |
+            type=semver,pattern=v{{version}}
+            type=semver,pattern=v{{major}}.{{minor}}
+
+      - name: Build and push image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+        with:
+          context: tests
+          file: tests/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          body: |
+            Docker image for the GTS specification e2e test runner.
+
+            ```
+            docker pull ghcr.io/globaltypesystem/gts-spec-tests:${{ github.ref_name }}
+            ```
+
+            Run against a server reachable from the container (Mac/Docker Desktop):
+            ```
+            docker run --rm ghcr.io/globaltypesystem/gts-spec-tests:${{ github.ref_name }} \
+              --gts-base-url http://host.docker.internal:8000
+            ```
+
+            Linux hosts:
+            ```
+            docker run --rm --add-host=host.docker.internal:host-gateway \
+              ghcr.io/globaltypesystem/gts-spec-tests:${{ github.ref_name }} \
+              --gts-base-url http://host.docker.internal:8000
+            ```

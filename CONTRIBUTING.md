@@ -116,3 +116,36 @@ Specification development guidelines:
 - Validate schemas against JSON Schema Draft 7 or later
 - Include both GTS Type Schemas (the canonical JSON definitions of types) and GTS Instance examples
 - Document any deviations or implementation-specific choices
+
+## Releases
+
+The specification version is declared in `README.md` via a machine-readable marker on the first line:
+
+```html
+<!-- gts-spec-version: X.Y -->
+```
+
+This marker is the canonical source of truth and is parsed by CI. The visible `> **VERSION**: ...` line below it is for human readers only and may be reworded freely, but its `X.Y` value MUST match the marker. When bumping the spec version, update both lines in the same change.
+
+A versioned Docker image of the conformance test suite is published to GHCR on every git tag matching `vX.Y.Z`, where:
+
+- `X.Y` MUST match the spec version declared in `README.md`. The release workflow enforces this and will fail the build on mismatch.
+- `Z` increments independently for changes to the test suite itself (additions, fixes, refactors) within the same spec version.
+
+When the specification moves to the next minor version (e.g. `0.11` → `0.12`), the README version line is updated in the same change, and the next release tag starts at `vX.Y.0`.
+
+### Cutting a release (maintainers only)
+
+Releases are produced from `github.com/GlobalTypeSystem/gts-spec`. The workflow is restricted to that repository; pushing a tag from a fork has no effect.
+
+```bash
+git tag v0.11.3
+git push origin v0.11.3
+```
+
+The [`Release Tests Image`](.github/workflows/release-tests-image.yml) workflow:
+
+1. Verifies the tag's `major.minor` matches the spec version in `README.md`.
+2. Builds the test runner image for `linux/amd64` and `linux/arm64`.
+3. Pushes it to `ghcr.io/globaltypesystem/gts-spec-tests` with two tags: the exact release `vX.Y.Z` and the rolling per-spec-version `vX.Y`. No floating `latest` tag is published — see `tests/README.md` for the rationale and consumer-side tag selection guidance.
+4. Creates a GitHub Release with auto-generated notes.

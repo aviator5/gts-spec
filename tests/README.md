@@ -51,6 +51,49 @@ This approach provides:
 
 ## Running the tests
 
+### With Docker (recommended)
+
+A pre-built image is published to the GitHub Container Registry on every release. The image tag tracks the specification version: `vMAJOR.MINOR` matches the spec, and the `PATCH` segment increments on test-suite changes (e.g. `v0.11.3` runs against spec `0.11`).
+
+Pick the tag that fits your use case:
+
+- `vX.Y.Z` — exact release (e.g. `v0.11.3`). Recommended for CI / reproducible runs.
+- `vX.Y` — rolling tag for the freshest patch of a given spec version (e.g. `v0.11`). Recommended for interactive use when you want to validate against a specific spec version.
+
+> There is no `latest` tag. Multiple spec versions can be maintained in parallel (e.g. a `v0.9.x` backport patch while main is at `0.11`), and a single floating `latest` would not have an unambiguous meaning. Always pin to either `vX.Y.Z` or `vX.Y`.
+
+```bash
+# Start your server on the host (port 8000 in this example)
+<your-server-start-command>
+
+# Run the test suite from the published image (Mac/Docker Desktop)
+docker run --rm ghcr.io/globaltypesystem/gts-spec-tests:v0.11 \
+    --gts-base-url http://host.docker.internal:8000
+
+# Linux hosts (host.docker.internal is not built-in)
+docker run --rm --add-host=host.docker.internal:host-gateway \
+    ghcr.io/globaltypesystem/gts-spec-tests:v0.11 \
+    --gts-base-url http://host.docker.internal:8000
+
+# Pin to an exact release for reproducible CI runs
+docker run --rm ghcr.io/globaltypesystem/gts-spec-tests:v0.11.3 \
+    --gts-base-url http://host.docker.internal:8000
+
+# Run a specific test file or pytest selector
+docker run --rm ghcr.io/globaltypesystem/gts-spec-tests:v0.11 \
+    --gts-base-url http://host.docker.internal:8000 \
+    test_op1_id_validation.py
+```
+
+To rebuild the image locally while iterating on tests:
+
+```bash
+docker build -t gts-spec-tests -f tests/Dockerfile tests
+docker run --rm gts-spec-tests --gts-base-url http://host.docker.internal:8000
+```
+
+### With Python
+
 ```bash
 # Start your server on 8000 port
 <your-server-start-command>
@@ -70,8 +113,6 @@ GTS_BASE_URL=http://127.0.0.1:8001 pytest
 # or set it persistently
 export GTS_BASE_URL=http://127.0.0.1:8001
 pytest
-```
-
 ```
 
 ## Implemented test cases
