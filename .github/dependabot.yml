@@ -1,0 +1,20 @@
+version: 2
+
+updates:
+  # Keep SHA-pinned GitHub Actions fresh. Dependabot understands SHA pins with
+  # trailing version comments (e.g. `@<sha>  # v4`) and updates both the SHA
+  # and the comment together — same UX as tag-based references, without the
+  # supply-chain risk of mutable tags.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "ci(deps)"
+    # Roll all action bumps into a single PR per week to avoid PR spam across
+    # our small workflow set.
+    groups:
+      github-actions:
+        patterns:
+          - "*"
