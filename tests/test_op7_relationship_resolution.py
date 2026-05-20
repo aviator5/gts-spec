@@ -212,7 +212,7 @@ class TestCaseTestOp7SchemaGraph_LocalRefAllowed(HttpRunner):
             .with_json({
                 "$$id": "gts://gts.x.test7.local_ref.allowed.v1~",
                 "$$schema": "http://json-schema.org/draft-07/schema#",
-                "$$defs": {
+                "definitions": {
                     "Base": {
                         "type": "object",
                         "properties": {"id": {"type": "string"}},
@@ -221,7 +221,7 @@ class TestCaseTestOp7SchemaGraph_LocalRefAllowed(HttpRunner):
                     }
                 },
                 "allOf": [
-                    {"$$ref": "#/$$defs/Base"}
+                    {"$$ref": "#/definitions/Base"}
                 ]
             })
             .validate()
