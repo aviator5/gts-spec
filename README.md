@@ -1,3 +1,4 @@
+<!-- gts-spec-version: 0.11 -->
 > **VERSION**: GTS specification draft, version 0.11
 
 # Global Type System (GTS) Specification
