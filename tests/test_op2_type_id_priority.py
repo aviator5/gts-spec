@@ -58,7 +58,7 @@ class TestCaseOp2TypeIdPriority_ChainTakesPrecedence(HttpRunner):
             )
             .assert_equal("body.selected_entity_field", "id")
             .assert_equal("body.selected_type_id_field", "id")
-            .assert_equal("body.is_type", False)
+            .assert_equal("body.is_type_schema", False)
         ),
     ]
 
@@ -99,7 +99,7 @@ class TestCaseOp2TypeIdPriority_ChainUsedAlone(HttpRunner):
             .assert_equal("body.type_id", "gts.acme.core.models.user.v1~")
             .assert_equal("body.selected_entity_field", "id")
             .assert_equal("body.selected_type_id_field", "id")
-            .assert_equal("body.is_type", False)
+            .assert_equal("body.is_type_schema", False)
         ),
     ]
 
@@ -136,7 +136,7 @@ class TestCaseOp2TypeIdPriority_TypeUsedForAnonymous(HttpRunner):
             .assert_equal("body.type_id", "gts.acme.core.models.product.v1~")
             .assert_equal("body.selected_entity_field", "id")
             .assert_equal("body.selected_type_id_field", "type")
-            .assert_equal("body.is_type", False)
+            .assert_equal("body.is_type_schema", False)
         ),
     ]
 
@@ -164,7 +164,7 @@ def test_op2_chained_id_takes_priority_over_explicit_type() -> None:
 
     # Instance ID should be preserved
     assert body["id"] == payload["id"]
-    assert body["is_type"] is False
+    assert body["is_type_schema"] is False
 
     # The chained ID MUST take precedence over explicit type field
     assert body["type_id"] == "gts.acme.core.models.user.v1~", (
@@ -195,7 +195,7 @@ def test_op2_chain_derivation_alone() -> None:
     body = r.json()
 
     assert body["id"] == payload["id"]
-    assert body["is_type"] is False
+    assert body["is_type_schema"] is False
     assert body["type_id"] == "gts.acme.core.models.user.v1~"
     assert body["selected_type_id_field"] == "id"
 
@@ -215,7 +215,7 @@ def test_op2_type_used_for_anonymous_instance() -> None:
     body = r.json()
 
     assert body["id"] == payload["id"]
-    assert body["is_type"] is False
+    assert body["is_type_schema"] is False
     # Type field is used for anonymous instances
     assert body["type_id"] == "gts.acme.core.models.order.v1~"
     assert body["selected_type_id_field"] == "type"
@@ -236,7 +236,7 @@ def test_op2_gtsTid_used_for_anonymous_instance() -> None:
     body = r.json()
 
     assert body["id"] == payload["id"]
-    assert body["is_type"] is False
+    assert body["is_type_schema"] is False
     # gtsTid field is used for anonymous instances
     assert body["type_id"] == "gts.acme.core.models.order.v1~"
     assert body["selected_type_id_field"] == "gtsTid"
@@ -263,7 +263,7 @@ def test_op2_deeply_chained_id_ignores_explicit_type() -> None:
     body = r.json()
 
     assert body["id"] == payload["id"]
-    assert body["is_type"] is False
+    assert body["is_type_schema"] is False
     # Chain takes priority, explicit type is ignored
     # Schema is derived from the chain (up to last ~)
     expected_schema = (
@@ -291,7 +291,7 @@ def test_op2_single_segment_gts_id_uses_explicit_type() -> None:
     body = r.json()
 
     assert body["id"] == payload["id"]
-    assert body["is_type"] is False
+    assert body["is_type_schema"] is False
     # Type field is used for single-segment IDs (no chain to derive from)
     assert body["type_id"] == "gts.acme.core.models.base.v1~"
     assert body["selected_type_id_field"] == "type"
@@ -316,7 +316,7 @@ def test_op2_combined_anonymous_id_takes_priority_over_explicit_type() -> None:
     assert r.status_code == 200
     body = r.json()
 
-    assert body["is_type"] is False
+    assert body["is_type_schema"] is False
     assert body["id"] == payload["id"]
     assert body["type_id"] == (
         "gts.x.core.events.type.v1~"
