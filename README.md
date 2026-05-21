@@ -373,7 +373,7 @@ A platform defines a base event schema with common fields:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "gts://gts.x.core.events.type.v1~",
   "type": "object",
   "properties": {
@@ -390,7 +390,7 @@ A third-party vendor (ABC) registers a derived event type for order placement:
 
 ```jsonc
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "gts://gts.x.core.events.type.v1~abc.events.order_placed.v1~", // define a new event type derived from the base event type
   "type": "object",
   "allOf": [
@@ -1001,7 +1001,7 @@ First, let's define the base event schema for vendor `X` event manager:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "gts://gts.x.core.events.type.v1~",
   "title": "Base Event",
   "type": "object",
@@ -1020,7 +1020,7 @@ Now, let's define the audit event schema for vendor `X` event manager:
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "gts://gts.x.core.events.type.v1~x.core.audit.event.v1~",
   "title": "Audit Event, derived from Base Event",
   "type": "object",
@@ -1051,7 +1051,7 @@ Then, let's define the schema of specific audit event registered by vendor `ABC`
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "gts://gts.x.core.events.type.v1~x.core.audit.event.v1~abc.app.store.purchase_audit_event.v1.2~",
   "title": "Vendor ABC Custom Purchase Audit Event from app APP",
   "type": "object",
@@ -1262,7 +1262,7 @@ It is recommended to make GTS Type references in JSON Schema `$ref` URI-compatib
 }
 ```
 
-Note: local JSON Schema references (e.g. `"$ref": "#/definitions/Foo"`, `"$ref": "#/$defs/Foo"`) are JSON Schema compliant and remain valid. The `gts://` recommendation applies only when `$ref` targets a GTS Type Identifier.
+Note: local JSON Pointer references (e.g. `"$ref": "#/definitions/Foo"`) are Draft-07 compliant and remain valid. The `gts://` recommendation applies only when `$ref` targets a GTS Type Identifier. Under Draft-07 the canonical container for reusable subschemas is `definitions`; the `$defs` keyword (introduced in 2019-09) MUST NOT be used in GTS Type Schemas.
 
 Implementation note: When `$ref` is expressed as `gts://...`, implementations should trim the `gts://` prefix and treat the remainder as the canonical GTS identifier for resolution, validation, comparison, and registry keys. The `gts://` prefix exists only to make `$ref` URI-compatible.
 
@@ -1695,6 +1695,14 @@ Result:    ❌ NO MATCH (different major versions)
 
 ## 11. JSON and JSON Schema Conventions
 
+### 11.0 JSON Schema Dialect
+
+GTS Type Schemas are defined in terms of **JSON Schema Draft-07**. Implementations MUST treat the GTS keywords described in this specification (`$id`, `$ref`, `allOf`, `const`, `x-gts-traits-schema`, `x-gts-traits`, `x-gts-final`, `x-gts-abstract`, etc.) as layered on top of Draft-07 semantics.
+
+- The `$schema` field of every GTS Type Schema MUST be `http://json-schema.org/draft-07/schema#`.
+- Implementations MAY accept other JSON Schema dialects for non-GTS schemas, but MUST NOT rely on keywords introduced after Draft-07 (such as `prefixItems`, `unevaluatedProperties`, `unevaluatedItems`, `$dynamicRef`/`$dynamicAnchor`, `dependentRequired`, `dependentSchemas`) when interpreting GTS Type Schemas.
+- Reusable subschemas inside a GTS Type Schema SHOULD be placed under the Draft-07 canonical keyword `definitions`. Local JSON Pointer references such as `"$ref": "#/definitions/Foo"` are the recommended form.
+
 ### 11.1 Global rules: schema vs instance, normalization, and document categories
 
 This section defines recommendations for how GTS-aware systems interpret JSON documents. The rules describe the concepts; the exact field names used for instance IDs and instance types are **implementation-defined** and may be **configuration-driven** (different systems may look for identifiers in different fields).
@@ -1857,7 +1865,7 @@ It is advisable to include instance identifiers in a top-level field such as `id
 
 ```json
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "gts://gts.x.core.events.type.v1~",
   "type": "object",
   "properties": {
