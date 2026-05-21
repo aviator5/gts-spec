@@ -4,30 +4,30 @@
   "title": "Event Instance Schema (Combined Anonymous Instance ID): order.placed",
   "type": "object",
   "allOf": [
-    { "$ref": "gts://gts.x.core.events.type_combined.v1~" },
-    {
+    { "$ref": "gts://gts.x.core.events.type_combined.v1~" }
+  ],
+  "required": ["payload", "subjectType"],
+  "x-gts-traits": {
+    "topicRef": "gts.x.core.events.topic.v1~x.commerce._.orders.v1"
+  },
+  "properties": {
+    "id": {
+      "type": "string",
+      "x-gts-ref": "gts.x.core.events.type_combined.v1~x.commerce.orders.order_placed.v1.0~*"
+    },
+    "payload": {
       "type": "object",
-      "required": ["payload", "subjectType"],
+      "required": ["orderId", "customerId", "totalAmount", "items"],
       "properties": {
-        "id": {
-          "type": "string",
-          "x-gts-ref": "gts.x.core.events.type_combined.v1~x.commerce.orders.order_placed.v1.0~*"
-        },
-        "payload": {
-          "type": "object",
-          "required": ["orderId", "customerId", "totalAmount", "items"],
-          "properties": {
-            "orderId": { "type": "string", "format": "uuid" },
-            "customerId": { "type": "string", "format": "uuid" },
-            "totalAmount": { "type": "number" },
-            "items": { "type": "array", "items": { "type": "object" } }
-          }
-        },
-        "subjectType": {
-          "type": "string",
-          "x-gts-ref": "gts.x.commerce.orders.order.v1.0~"
-        }
+        "orderId": { "type": "string", "format": "uuid" },
+        "customerId": { "type": "string", "format": "uuid" },
+        "totalAmount": { "type": "number" },
+        "items": { "type": "array", "items": { "type": "object" } }
       }
+    },
+    "subjectType": {
+      "type": "string",
+      "x-gts-ref": "gts.x.commerce.orders.order.v1.0~"
     }
-  ]
+  }
 }

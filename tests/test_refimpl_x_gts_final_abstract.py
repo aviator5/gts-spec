@@ -13,6 +13,7 @@ from .helpers.http_run_helpers import (
     register as _register,
     register_derived as _register_derived,
     register_instance as _register_instance,
+    register_trait_type as _register_trait_type,
     validate_entity as _validate_entity,
     validate_instance as _validate_instance,
     validate_type_schema as _validate_type_schema,
@@ -833,30 +834,33 @@ class TestCaseInteraction_FinalWithTraitsFullyResolved(HttpRunner):
         super().test_start()
 
     teststeps = [
+        _register_trait_type(
+            "gts://gts.x.testfa.finaltrait.traits.v1~",
+            {
+                "type": "object",
+                "properties": {
+                    "retention": {"type": "string", "default": "P30D"},
+                    "priority": {"type": "integer"},
+                },
+                "required": ["priority"],
+            },
+            "register trait-type with required priority (no default)",
+        ),
         _register(
             "gts://gts.x.testfa.finaltrait.base.v1~",
             {
                 "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "properties": {
-                        "retention": {"type": "string", "default": "P30D"},
-                        "priority": {"type": "integer"},
-                    },
-                    "required": ["priority"],
-                },
+                "x-gts-traits-schema": "gts://gts.x.testfa.finaltrait.traits.v1~",
+                "x-gts-abstract": True,
                 "properties": {"name": {"type": "string"}},
             },
-            "register base with trait schema",
+            "register abstract base attaching the trait-type",
         ),
         _register_derived(
             "gts://gts.x.testfa.finaltrait.base.v1~x.testfa._.leaf.v1~",
             "gts://gts.x.testfa.finaltrait.base.v1~",
             {
-                "type": "object",
-                "x-gts-traits": {
-                    "priority": 5,
-                },
+                "x-gts-traits": {"priority": 5},
             },
             "register final derived with traits resolved",
             top_level={"x-gts-final": True},
@@ -882,26 +886,31 @@ class TestCaseInteraction_FinalWithTraitsMissing(HttpRunner):
         super().test_start()
 
     teststeps = [
+        _register_trait_type(
+            "gts://gts.x.testfa.finalmiss.traits.v1~",
+            {
+                "type": "object",
+                "properties": {
+                    "priority": {"type": "integer"},
+                },
+                "required": ["priority"],
+            },
+            "register trait-type (priority required, no default)",
+        ),
         _register(
             "gts://gts.x.testfa.finalmiss.base.v1~",
             {
                 "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "properties": {
-                        "priority": {"type": "integer"},
-                    },
-                    "required": ["priority"],
-                },
+                "x-gts-traits-schema": "gts://gts.x.testfa.finalmiss.traits.v1~",
+                "x-gts-abstract": True,
                 "properties": {"name": {"type": "string"}},
             },
-            "register base with required trait (no default)",
+            "register abstract base attaching trait-type",
         ),
         _register_derived(
             "gts://gts.x.testfa.finalmiss.base.v1~x.testfa._.leaf.v1~",
             "gts://gts.x.testfa.finalmiss.base.v1~",
             {
-                "type": "object",
                 # x-gts-traits intentionally omitted — priority not resolved
             },
             "register final derived without resolving traits",
@@ -928,19 +937,24 @@ class TestCaseInteraction_AbstractWithIncompleteTraitsOk(HttpRunner):
         super().test_start()
 
     teststeps = [
+        _register_trait_type(
+            "gts://gts.x.testfa.abstrait.traits.v1~",
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "priority": {"type": "integer"},
+                },
+                "required": ["priority"],
+            },
+            "register trait-type (priority required, no default)",
+        ),
         _register(
             "gts://gts.x.testfa.abstrait.base.v1~",
             {
                 "type": "object",
                 "x-gts-abstract": True,
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "priority": {"type": "integer"},
-                    },
-                    "required": ["priority"],
-                },
+                "x-gts-traits-schema": "gts://gts.x.testfa.abstrait.traits.v1~",
                 "properties": {"name": {"type": "string"}},
             },
             "register abstract base with required trait (no default)",

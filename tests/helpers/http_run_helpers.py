@@ -24,20 +24,69 @@ def register(gts_id, schema_body, label="register schema"):
 
 
 def register_derived(gts_id, base_ref, overlay, label="register derived", top_level=None):
-    """Register a derived schema that uses allOf with a $$ref.
+    """Register a derived schema that uses the strict canonical form (§3.2.1).
 
-    top_level: optional dict of extra keys to add at schema top level
-    (e.g. {"x-gts-final": True}) — these MUST NOT go inside allOf.
+    Emits a derived GTS Type Schema with:
+    - top-level `allOf: [{"$ref": base_ref}]` (exactly one item, the parent ref)
+    - the `overlay` dict spread at the top level alongside `allOf`
+    - optional extra `top_level` keys (e.g. {"x-gts-final": True})
+
+    All of `properties`, `required`, narrowed constraints, GTS modifiers, and trait
+    keywords belong at the top level — never inside `allOf`.
     """
     body = {
         "$$id": gts_id,
         "$$schema": "http://json-schema.org/draft-07/schema#",
         "type": "object",
-        "allOf": [
-            {"$$ref": base_ref},
-            overlay,
-        ],
+        "allOf": [{"$$ref": base_ref}],
     }
+    if overlay:
+        body.update(overlay)
+    if top_level:
+        body.update(top_level)
+    return Step(
+        RunRequest(label)
+        .post("/entities")
+        .with_json(body)
+        .validate()
+        .assert_equal("status_code", 200)
+    )
+
+
+def register_trait_type(trait_id, schema_body, label="register trait type"):
+    """Register a trait-type — a regular GTS Type Schema published under a
+    trait-namespaced `$id` (e.g. `gts://gts.x.core.traits.event_meta.v1~`).
+
+    Thin wrapper around `register` kept for readability in OP#13 tests.
+    """
+    return register(trait_id, schema_body, label)
+
+
+def register_host_with_trait_ref(
+    gts_id, base_ref, trait_urn, overlay=None, traits=None,
+    label="register host with trait ref", top_level=None,
+):
+    """Register a derived host-type that attaches a trait-type by URN.
+
+    Always emits strict Form A:
+    - `allOf: [{"$ref": base_ref}]` at top level
+    - `x-gts-traits-schema: trait_urn` (string) at top level
+    - optional `x-gts-traits: traits` (plain object) at top level
+    - `overlay` and `top_level` dicts spread at the top level
+
+    Use `register_trait_type` to publish the trait-type itself first.
+    """
+    body = {
+        "$$id": gts_id,
+        "$$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "allOf": [{"$$ref": base_ref}],
+        "x-gts-traits-schema": trait_urn,
+    }
+    if traits is not None:
+        body["x-gts-traits"] = traits
+    if overlay:
+        body.update(overlay)
     if top_level:
         body.update(top_level)
     return Step(

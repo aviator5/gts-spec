@@ -4,35 +4,32 @@
   "title": "Event Instance Schema: order.placed",
   "type": "object",
   "allOf": [
-    { "$ref": "gts://gts.x.core.events.type.v1~" },
-    {
+    { "$ref": "gts://gts.x.core.events.type.v1~" }
+  ],
+  "required": ["type", "payload", "subjectType"],
+  "x-gts-traits": {
+    "topicRef": "gts.x.core.events.topic.v1~x.commerce._.orders.v1",
+    "retention": "P90D"
+  },
+  "properties": {
+    "type": {
+      "const": "gts.x.core.events.type.v1~x.commerce.orders.order_placed.v1.1~",
+      "$comment": "The value is required only for IDE-side validation"
+    },
+    "payload": {
       "type": "object",
-      "required": ["type", "payload", "subjectType"],
-      "x-gts-traits": {
-        "topicRef": "gts.x.core.events.topic.v1~x.commerce._.orders.v1",
-        "retention": "P90D"
-      },
+      "required": ["orderId", "customerId", "totalAmount", "items"],
       "properties": {
-        "type": {
-          "const": "gts.x.core.events.type.v1~x.commerce.orders.order_placed.v1.1~",
-          "$comment": "The value is required only for IDE-side validation"
-        },
-        "payload": {
-          "type": "object",
-          "required": ["orderId", "customerId", "totalAmount", "items"],
-          "properties": {
-            "orderId": { "type": "string", "format": "uuid" },
-            "customerId": { "type": "string", "format": "uuid" },
-            "totalAmount": { "type": "number" },
-            "items": { "type": "array", "items": { "type": "object" } },
-            "new_field_in_v1_1": { "type": "string", "default": "some_value" }
-          }
-        },
-        "subjectType": {
-          "type": "string",
-          "x-gts-ref": "gts.x.commerce.orders.order.v1.0~"
-        }
+        "orderId": { "type": "string", "format": "uuid" },
+        "customerId": { "type": "string", "format": "uuid" },
+        "totalAmount": { "type": "number" },
+        "items": { "type": "array", "items": { "type": "object" } },
+        "new_field_in_v1_1": { "type": "string", "default": "some_value" }
       }
+    },
+    "subjectType": {
+      "type": "string",
+      "x-gts-ref": "gts.x.commerce.orders.order.v1.0~"
     }
-  ]
+  }
 }

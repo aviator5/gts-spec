@@ -9,17 +9,7 @@
     "tenantId",
     "occurredAt"
   ],
-  "x-gts-traits-schema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {
-      "topicRef": {
-        "description": "ID of the topic where events of this type are stored.",
-        "type": "string",
-        "x-gts-ref": "gts.x.core.events.topic.v1~"
-      }
-    }
-  },
+  "x-gts-traits-schema": "gts://gts.x.core.traits.event_meta.v1~",
   "properties": {
     "$schema": {
       "description": "Link to the event type schema.",

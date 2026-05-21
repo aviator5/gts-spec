@@ -1,0 +1,20 @@
+{
+  "$id": "gts://gts.x.core.traits.event_meta.v1~",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Event Meta Trait",
+  "type": "object",
+  "description": "Trait-type attached to event host-types. Carries cross-cutting metadata: where instances of the event are published (topicRef) and how long they are retained.",
+  "properties": {
+    "topicRef": {
+      "description": "GTS ID of the topic/stream where events of this type are published.",
+      "type": "string",
+      "x-gts-ref": "gts.x.core.events.topic.v1~",
+      "default": "gts.x.core.events.topic.v1~x.core._.default.v1"
+    },
+    "retention": {
+      "description": "ISO 8601 duration for event retention.",
+      "type": "string",
+      "default": "P30D"
+    }
+  }
+}

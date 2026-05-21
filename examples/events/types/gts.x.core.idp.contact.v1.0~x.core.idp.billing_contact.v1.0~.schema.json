@@ -4,21 +4,18 @@
   "title": "User",
   "type": "object",
   "allOf": [
-    { "$ref": "gts://gts.x.core.idp.contact.v1.0~" },
-    {
+    { "$ref": "gts://gts.x.core.idp.contact.v1.0~" }
+  ],
+  "properties": {
+    "custom_properties": {
       "type": "object",
+      "required": ["phone_number", "address", "currency"],
       "properties": {
-        "custom_properties": {
-           "type": "object",
-           "required": ["phone_number", "address", "currency"],
-           "properties": {
-            "phone_number": { "type": "string" },
-            "address": { "type": "string" },
-            "currency": { "type": "string" }
-           },
-           "additionalProperties": true
-        }
-      }
+        "phone_number": { "type": "string" },
+        "address": { "type": "string" },
+        "currency": { "type": "string" }
+      },
+      "additionalProperties": true
     }
-  ]
+  }
 }

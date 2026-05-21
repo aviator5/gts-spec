@@ -5,35 +5,32 @@
   "description": "Event instance schema for the user.created event type",
   "type": "object",
   "allOf": [
-    { "$ref": "gts://gts.x.core.events.type.v1~" },
-    {
+    { "$ref": "gts://gts.x.core.events.type.v1~" }
+  ],
+  "required": ["type", "payload", "subjectType"],
+  "x-gts-traits": {
+    "topicRef": "gts.x.core.events.topic.v1~x.core.idp.contacts.v1",
+    "retention": "P365D"
+  },
+  "properties": {
+    "type": {
+      "const": "gts.x.core.events.type.v1~x.core.idp.contact_created.v1.0~",
+      "$comment": "The value is required only for IDE-side validation"
+    },
+    "payload": {
       "type": "object",
-      "required": ["type", "payload", "subjectType"],
-      "x-gts-traits": {
-        "topicRef": "gts.x.core.events.topic.v1~x.core.idp.contacts.v1",
-        "retention": "P365D"
-      },
+      "required": ["userId", "email", "name", "roles"],
+      "additionalProperties": false,
       "properties": {
-        "type": {
-          "const": "gts.x.core.events.type.v1~x.core.idp.contact_created.v1.0~",
-          "$comment": "The value is required only for IDE-side validation"
-        },
-        "payload": {
-          "type": "object",
-          "required": ["userId", "email", "name", "roles"],
-          "additionalProperties": false,
-          "properties": {
-            "userId": { "type": "string", "format": "uuid" },
-            "email": { "type": "string", "format": "email" },
-            "name": { "type": "string" },
-            "roles": { "type": "array", "items": { "type": "string" } }
-          }
-        },
-        "subjectType": {
-          "type": "string",
-          "x-gts-ref": "gts.x.core.idp.contact.v1.0~"
-        }
+        "userId": { "type": "string", "format": "uuid" },
+        "email": { "type": "string", "format": "email" },
+        "name": { "type": "string" },
+        "roles": { "type": "array", "items": { "type": "string" } }
       }
+    },
+    "subjectType": {
+      "type": "string",
+      "x-gts-ref": "gts.x.core.idp.contact.v1.0~"
     }
-  ]
+  }
 }

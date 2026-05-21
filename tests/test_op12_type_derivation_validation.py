@@ -3523,5 +3523,568 @@ class TestCaseOp12_FinalBase_SelfValidationPasses(HttpRunner):
     ]
 
 
+# ---------------------------------------------------------------------------
+# Structural top-level composition rules (§3.2.1, ADR-0002)
+#
+# These tests exercise the strict canonical form for derived GTS Type Schemas:
+#   - allOf at top level with exactly ONE subschema
+#   - that subschema is {"$ref": "gts://<immediate-parent>"}
+#   - everything else (properties, required, modifiers, traits, ...) at top level
+#   - top-level anyOf/oneOf/not forbidden on all GTS Type Schemas
+#   - base types do not use allOf for derivation
+#
+# Each test posts a malformed derived schema directly to /entities (bypassing
+# the helper, which always emits strict Form A) and asserts that
+# /validate-type-schema reports ok=false.
+# ---------------------------------------------------------------------------
+
+
+def _post_schema_raw(body, label):
+    """Post a custom schema body to /entities. Used for malformed structural cases."""
+    return Step(
+        RunRequest(label)
+        .post("/entities")
+        .with_json(body)
+        .validate()
+        .assert_equal("status_code", 200)
+    )
+
+
+_STRUCT_NS = "gts.x.test12struct"
+
+
+class TestCaseOp12_Struct_CanonicalForm_Ok(HttpRunner):
+    """OP#12 §3.2.1: canonical form (allOf: [{$ref: parent}] + props at top level) passes."""
+
+    config = Config("OP#12 - canonical Form A accepted").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            f"gts://{_STRUCT_NS}.canonical.base.v1~",
+            {"type": "object", "properties": {"a": {"type": "string"}}},
+            "register base",
+        ),
+        _register_derived(
+            f"gts://{_STRUCT_NS}.canonical.base.v1~x.test12struct._.canonical_ok.v1~",
+            f"gts://{_STRUCT_NS}.canonical.base.v1~",
+            {"properties": {"b": {"type": "string"}}},
+            "register derived in canonical Form A",
+        ),
+        _validate_type_schema(
+            f"{_STRUCT_NS}.canonical.base.v1~x.test12struct._.canonical_ok.v1~",
+            True,
+            "validate canonical form should pass",
+        ),
+    ]
+
+
+class TestCaseOp12_Struct_AllOfTwoItems_Rejected(HttpRunner):
+    """OP#12 §3.2.1: legacy Form B (allOf with $ref + inline overlay) is rejected."""
+
+    config = Config("OP#12 - allOf with overlay inside (Form B) rejected").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            f"gts://{_STRUCT_NS}.formb.base.v1~",
+            {"type": "object", "properties": {"a": {"type": "string"}}},
+            "register base",
+        ),
+        _post_schema_raw(
+            {
+                "$$id": f"gts://{_STRUCT_NS}.formb.base.v1~x.test12struct._.form_b_overlay.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [
+                    {"$$ref": f"gts://{_STRUCT_NS}.formb.base.v1~"},
+                    {
+                        "type": "object",
+                        "properties": {"b": {"type": "string"}},
+                    },
+                ],
+            },
+            "register derived with overlay nested inside allOf (Form B)",
+        ),
+        _validate_type_schema(
+            f"{_STRUCT_NS}.formb.base.v1~x.test12struct._.form_b_overlay.v1~",
+            False,
+            "validate should fail - Form B is not the canonical form",
+        ),
+    ]
+
+
+class TestCaseOp12_Struct_HybridFormAB_Rejected(HttpRunner):
+    """OP#12 §3.2.1: hybrid form — overlay BOTH at top level AND inside allOf — rejected.
+
+    Under JSON Schema this is well-defined (parent + nested overlay + top-level overlay
+    all combine via implicit AND), but the structure is opaque to readers and tools.
+    Rule (2) — allOf MUST contain exactly one subschema — rejects this shape.
+    """
+
+    config = Config("OP#12 - hybrid Form A+B rejected").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            f"gts://{_STRUCT_NS}.hybrid.base.v1~",
+            {"type": "object", "properties": {"a": {"type": "string"}}},
+            "register base",
+        ),
+        _post_schema_raw(
+            {
+                "$$id": f"gts://{_STRUCT_NS}.hybrid.base.v1~x.test12struct._.hybrid_a_b.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [
+                    {"$$ref": f"gts://{_STRUCT_NS}.hybrid.base.v1~"},
+                    {"properties": {"b_in_allof": {"type": "string"}}},
+                ],
+                "properties": {"c_top_level": {"type": "integer"}},
+            },
+            "register derived with overlays in BOTH allOf[1] and top level",
+        ),
+        _validate_type_schema(
+            f"{_STRUCT_NS}.hybrid.base.v1~x.test12struct._.hybrid_a_b.v1~",
+            False,
+            "validate should fail - allOf has 2 items even though top-level also has properties",
+        ),
+    ]
+
+
+class TestCaseOp12_Struct_AllOfThreeItems_Rejected(HttpRunner):
+    """OP#12 §3.2.1: allOf with 3+ items at top level is rejected."""
+
+    config = Config("OP#12 - allOf with 3 items rejected").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            f"gts://{_STRUCT_NS}.three.base.v1~",
+            {"type": "object", "properties": {"a": {"type": "string"}}},
+            "register base",
+        ),
+        _post_schema_raw(
+            {
+                "$$id": f"gts://{_STRUCT_NS}.three.base.v1~x.test12struct._.three_items.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [
+                    {"$$ref": f"gts://{_STRUCT_NS}.three.base.v1~"},
+                    {"properties": {"b": {"type": "string"}}},
+                    {"properties": {"c": {"type": "string"}}},
+                ],
+            },
+            "register derived with allOf of 3 items",
+        ),
+        _validate_type_schema(
+            f"{_STRUCT_NS}.three.base.v1~x.test12struct._.three_items.v1~",
+            False,
+            "validate should fail - allOf has 3 items",
+        ),
+    ]
+
+
+class TestCaseOp12_Struct_AllOfNoRef_Rejected(HttpRunner):
+    """OP#12 §3.2.1: allOf without a $ref to parent is rejected (no derivation pointer)."""
+
+    config = Config("OP#12 - allOf without $ref rejected").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            f"gts://{_STRUCT_NS}.noref.base.v1~",
+            {"type": "object", "properties": {"a": {"type": "string"}}},
+            "register base",
+        ),
+        _post_schema_raw(
+            {
+                "$$id": f"gts://{_STRUCT_NS}.noref.base.v1~x.test12struct._.no_ref.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [
+                    {"properties": {"b": {"type": "string"}}},
+                ],
+            },
+            "register derived with allOf containing only an inline overlay",
+        ),
+        _validate_type_schema(
+            f"{_STRUCT_NS}.noref.base.v1~x.test12struct._.no_ref.v1~",
+            False,
+            "validate should fail - allOf has no $ref to parent",
+        ),
+    ]
+
+
+class TestCaseOp12_Struct_AllOfMultipleRefs_Rejected(HttpRunner):
+    """OP#12 §3.2.1: multi-parent inheritance attempt (2+ $refs in allOf) is rejected."""
+
+    config = Config("OP#12 - allOf with multiple $refs rejected").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            f"gts://{_STRUCT_NS}.multiref.parent_a.v1~",
+            {"type": "object", "properties": {"a": {"type": "string"}}},
+            "register parent A",
+        ),
+        _register(
+            f"gts://{_STRUCT_NS}.multiref.parent_b.v1~",
+            {"type": "object", "properties": {"b": {"type": "string"}}},
+            "register parent B",
+        ),
+        _post_schema_raw(
+            {
+                "$$id": f"gts://{_STRUCT_NS}.multiref.parent_a.v1~x.test12struct._.multi_ref.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [
+                    {"$$ref": f"gts://{_STRUCT_NS}.multiref.parent_a.v1~"},
+                    {"$$ref": f"gts://{_STRUCT_NS}.multiref.parent_b.v1~"},
+                ],
+            },
+            "register derived with two $ref items (multi-parent)",
+        ),
+        _validate_type_schema(
+            f"{_STRUCT_NS}.multiref.parent_a.v1~x.test12struct._.multi_ref.v1~",
+            False,
+            "validate should fail - multi-parent inheritance not allowed",
+        ),
+    ]
+
+
+class TestCaseOp12_Struct_AllOfRefSkipsLevel_Rejected(HttpRunner):
+    """OP#12 §3.2.1: $ref must point to the immediate parent; skip-level $ref rejected.
+
+    Chain A~B~C~ with $ref = A~ (skipping B) is invalid.
+    """
+
+    config = Config("OP#12 - $ref skipping a level rejected").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            f"gts://{_STRUCT_NS}.skip.a.v1~",
+            {"type": "object", "properties": {"a": {"type": "string"}}},
+            "register A (base)",
+        ),
+        _register_derived(
+            f"gts://{_STRUCT_NS}.skip.a.v1~x.test12struct._.b.v1~",
+            f"gts://{_STRUCT_NS}.skip.a.v1~",
+            {"properties": {"b": {"type": "string"}}},
+            "register B from A",
+        ),
+        _post_schema_raw(
+            {
+                "$$id": (
+                    f"gts://{_STRUCT_NS}.skip.a.v1~x.test12struct._.b.v1~"
+                    "x.test12struct._.c_skip.v1~"
+                ),
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [
+                    {"$$ref": f"gts://{_STRUCT_NS}.skip.a.v1~"}
+                ],
+                "properties": {"c": {"type": "string"}},
+            },
+            "register C with $ref to A (skipping B)",
+        ),
+        _validate_type_schema(
+            (
+                f"{_STRUCT_NS}.skip.a.v1~x.test12struct._.b.v1~"
+                "x.test12struct._.c_skip.v1~"
+            ),
+            False,
+            "validate should fail - $ref skips immediate parent",
+        ),
+    ]
+
+
+class TestCaseOp12_Struct_AllOfRefWrongParent_Rejected(HttpRunner):
+    """OP#12 §3.2.1: $ref must match the chained $id; referencing an unrelated type rejected."""
+
+    config = Config("OP#12 - $ref to unrelated type rejected").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            f"gts://{_STRUCT_NS}.wrongp.expected.v1~",
+            {"type": "object", "properties": {"a": {"type": "string"}}},
+            "register expected parent",
+        ),
+        _register(
+            f"gts://{_STRUCT_NS}.wrongp.unrelated.v1~",
+            {"type": "object", "properties": {"u": {"type": "string"}}},
+            "register unrelated type",
+        ),
+        _post_schema_raw(
+            {
+                "$$id": f"gts://{_STRUCT_NS}.wrongp.expected.v1~x.test12struct._.wrong_parent.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [
+                    {"$$ref": f"gts://{_STRUCT_NS}.wrongp.unrelated.v1~"}
+                ],
+                "properties": {"b": {"type": "string"}},
+            },
+            "register derived with $ref to an unrelated type",
+        ),
+        _validate_type_schema(
+            f"{_STRUCT_NS}.wrongp.expected.v1~x.test12struct._.wrong_parent.v1~",
+            False,
+            "validate should fail - $ref does not match immediate parent in chain",
+        ),
+    ]
+
+
+class TestCaseOp12_Struct_TopLevelAnyOf_Rejected(HttpRunner):
+    """OP#12 §3.2.1: anyOf at top level of a derived schema is rejected."""
+
+    config = Config("OP#12 - top-level anyOf in derived rejected").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            f"gts://{_STRUCT_NS}.tlany.base.v1~",
+            {"type": "object", "properties": {"a": {"type": "string"}}},
+            "register base",
+        ),
+        _post_schema_raw(
+            {
+                "$$id": f"gts://{_STRUCT_NS}.tlany.base.v1~x.test12struct._.top_anyof.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [{"$$ref": f"gts://{_STRUCT_NS}.tlany.base.v1~"}],
+                "anyOf": [
+                    {"properties": {"b1": {"type": "string"}}},
+                    {"properties": {"b2": {"type": "string"}}},
+                ],
+            },
+            "register derived with top-level anyOf",
+        ),
+        _validate_type_schema(
+            f"{_STRUCT_NS}.tlany.base.v1~x.test12struct._.top_anyof.v1~",
+            False,
+            "validate should fail - top-level anyOf forbidden",
+        ),
+    ]
+
+
+class TestCaseOp12_Struct_TopLevelOneOf_Rejected(HttpRunner):
+    """OP#12 §3.2.1: oneOf at top level of a derived schema is rejected."""
+
+    config = Config("OP#12 - top-level oneOf in derived rejected").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            f"gts://{_STRUCT_NS}.tloneof.base.v1~",
+            {"type": "object", "properties": {"a": {"type": "string"}}},
+            "register base",
+        ),
+        _post_schema_raw(
+            {
+                "$$id": f"gts://{_STRUCT_NS}.tloneof.base.v1~x.test12struct._.top_oneof.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [{"$$ref": f"gts://{_STRUCT_NS}.tloneof.base.v1~"}],
+                "oneOf": [
+                    {"properties": {"b1": {"type": "string"}}},
+                    {"properties": {"b2": {"type": "string"}}},
+                ],
+            },
+            "register derived with top-level oneOf",
+        ),
+        _validate_type_schema(
+            f"{_STRUCT_NS}.tloneof.base.v1~x.test12struct._.top_oneof.v1~",
+            False,
+            "validate should fail - top-level oneOf forbidden",
+        ),
+    ]
+
+
+class TestCaseOp12_Struct_TopLevelNot_Rejected(HttpRunner):
+    """OP#12 §3.2.1: `not` at top level of a derived schema is rejected."""
+
+    config = Config("OP#12 - top-level not in derived rejected").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            f"gts://{_STRUCT_NS}.tlnot.base.v1~",
+            {"type": "object", "properties": {"a": {"type": "string"}}},
+            "register base",
+        ),
+        _post_schema_raw(
+            {
+                "$$id": f"gts://{_STRUCT_NS}.tlnot.base.v1~x.test12struct._.top_not.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [{"$$ref": f"gts://{_STRUCT_NS}.tlnot.base.v1~"}],
+                "not": {"required": ["forbidden_field"]},
+            },
+            "register derived with top-level not",
+        ),
+        _validate_type_schema(
+            f"{_STRUCT_NS}.tlnot.base.v1~x.test12struct._.top_not.v1~",
+            False,
+            "validate should fail - top-level not forbidden",
+        ),
+    ]
+
+
+class TestCaseOp12_Struct_BaseTypeWithAllOf_Rejected(HttpRunner):
+    """OP#12 §3.2.1: base types (1-segment $id) MUST NOT use allOf for derivation."""
+
+    config = Config("OP#12 - base type with allOf for derivation rejected").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            f"gts://{_STRUCT_NS}.basederiv.other.v1~",
+            {"type": "object", "properties": {"o": {"type": "string"}}},
+            "register an unrelated type to reference",
+        ),
+        _post_schema_raw(
+            {
+                "$$id": f"gts://{_STRUCT_NS}.basederiv.bad_base.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [
+                    {"$$ref": f"gts://{_STRUCT_NS}.basederiv.other.v1~"}
+                ],
+                "properties": {"x": {"type": "string"}},
+            },
+            "register a 1-segment base $id with allOf (derivation pointer)",
+        ),
+        _validate_type_schema(
+            f"{_STRUCT_NS}.basederiv.bad_base.v1~",
+            False,
+            "validate should fail - base type cannot use allOf for derivation",
+        ),
+    ]
+
+
+class TestCaseOp12_Struct_BaseTypeWithTopLevelAnyOf_Rejected(HttpRunner):
+    """OP#12 §3.2.1: base types also forbid top-level anyOf/oneOf/not."""
+
+    config = Config("OP#12 - base type with top-level anyOf rejected").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _post_schema_raw(
+            {
+                "$$id": f"gts://{_STRUCT_NS}.baseunion.bad.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "anyOf": [
+                    {"properties": {"a": {"type": "string"}}},
+                    {"properties": {"b": {"type": "integer"}}},
+                ],
+            },
+            "register a 1-segment base $id with top-level anyOf",
+        ),
+        _validate_type_schema(
+            f"{_STRUCT_NS}.baseunion.bad.v1~",
+            False,
+            "validate should fail - base type with top-level anyOf forbidden",
+        ),
+    ]
+
+
+class TestCaseOp12_Struct_NestedAnyOfInProperty_Ok(HttpRunner):
+    """OP#12 §3.2.1: anyOf inside a property sub-schema is allowed (union types at depth)."""
+
+    config = Config("OP#12 - nested anyOf in property accepted").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            f"gts://{_STRUCT_NS}.nestany.base.v1~",
+            {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "value": {
+                        "anyOf": [
+                            {"type": "string"},
+                            {"type": "integer"},
+                        ]
+                    },
+                },
+            },
+            "register base with anyOf nested under properties.value",
+        ),
+        _validate_type_schema(
+            f"{_STRUCT_NS}.nestany.base.v1~",
+            True,
+            "validate should pass - anyOf is nested, not top-level",
+        ),
+    ]
+
+
+class TestCaseOp12_Struct_NestedOneOfInDefinitions_Ok(HttpRunner):
+    """OP#12 §3.2.1: oneOf inside `definitions` is allowed."""
+
+    config = Config("OP#12 - nested oneOf in definitions accepted").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            f"gts://{_STRUCT_NS}.nestdef.base.v1~",
+            {
+                "type": "object",
+                "definitions": {
+                    "StringOrInt": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "integer"},
+                        ]
+                    }
+                },
+                "properties": {
+                    "v": {"$$ref": "#/definitions/StringOrInt"}
+                },
+            },
+            "register base with oneOf nested under definitions",
+        ),
+        _validate_type_schema(
+            f"{_STRUCT_NS}.nestdef.base.v1~",
+            True,
+            "validate should pass - oneOf is nested under definitions",
+        ),
+    ]
+
+
 if __name__ == "__main__":
     TestCaseTestOp12TypeDerivationValidation_DerivedSchemaFullyMatches().test_start()

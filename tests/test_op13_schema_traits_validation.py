@@ -1,994 +1,935 @@
+"""OP#13 — Schema Traits Validation tests for the URN-string trait-type model.
+
+In this model:
+- `x-gts-traits-schema` value is a single string URN referencing a registered
+  trait-type (a regular GTS Type Schema).
+- A host-type attaches one trait-type by URN. Descendants inherit by default
+  and MAY refine the trait-type via parallel derivation (the descendant's
+  trait-type must be derived from the ancestor's trait-type).
+- `x-gts-traits` is a plain JSON object — an instance of the effective
+  trait-type. Values from all levels of the host chain are merged shallowly
+  with immutable-once-set semantics.
+
+See README.md §9.7 and ADR-0002 for the full spec.
+"""
+
 from .conftest import get_gts_base_url
 from .helpers.http_run_helpers import (
     register as _register,
     register_derived as _register_derived,
+    register_trait_type as _register_trait_type,
+    register_host_with_trait_ref as _register_host_with_trait_ref,
     validate_entity as _validate_entity,
     validate_type_schema as _validate_type_schema,
 )
-from httprunner import HttpRunner, Config
+from httprunner import HttpRunner, Config, Step, RunRequest
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# Helpers and constants
+# ---------------------------------------------------------------------------
+
+
+TOPIC_REF_DEFAULT = "gts.x.core.events.topic.v1~x.core._.default.v1"
+TOPIC_REF_ORDERS = "gts.x.core.events.topic.v1~x.test13._.orders.v1"
+TOPIC_REF_AUDIT = "gts.x.core.events.topic.v1~x.test13._.audit.v1"
+TOPIC_REF_NOTIF = "gts.x.core.events.topic.v1~x.test13._.notif.v1"
+
+
+def _trait_event_meta(trait_id, with_topic_default=True, with_retention_default=True,
+                      additional=None, required=None):
+    """Build a basic event_meta trait-type body (topicRef + retention)."""
+    topic_prop = {
+        "type": "string",
+        "x-gts-ref": "gts.x.core.events.topic.v1~",
+    }
+    if with_topic_default:
+        topic_prop["default"] = TOPIC_REF_DEFAULT
+    retention_prop = {"type": "string"}
+    if with_retention_default:
+        retention_prop["default"] = "P30D"
+    body = {
+        "type": "object",
+        "properties": {
+            "topicRef": topic_prop,
+            "retention": retention_prop,
+        },
+    }
+    if additional:
+        body["properties"].update(additional)
+    if required:
+        body["required"] = required
+    return body
+
+
+def _post_schema_raw(body, label):
+    """Direct /entities POST for malformed bodies that helpers can't build."""
+    return Step(
+        RunRequest(label)
+        .post("/entities")
+        .with_json(body)
+        .validate()
+        .assert_equal("status_code", 200)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Value-validation cases (merged effective values vs effective trait-type)
 # ---------------------------------------------------------------------------
 
 
 class TestCaseOp13_TraitsValid_AllResolved(HttpRunner):
-    """OP#13 - Traits: derived schema provides all trait values.
+    """OP#13 - derived host provides every trait value concretely. Passes."""
 
-    Validation passes.
-    """
     config = Config("OP#13 - All Traits Resolved").base_url(get_gts_base_url())
 
     def test_start(self):
         super().test_start()
 
     teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.allres.v1~",
+            _trait_event_meta("allres", with_topic_default=False, with_retention_default=False),
+            "register trait-type (no defaults)",
+        ),
         _register(
-            "gts://gts.x.test13.traits.event.v1~",
+            "gts://gts.x.test13.h.allres.event.v1~",
             {
                 "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "topicRef": {
-                            "type": "string",
-                            "description": "Topic reference",
-                            "x-gts-ref": "gts.x.core.events.topic.v1~",
-                        },
-                        "retention": {
-                            "type": "string",
-                            "description": "Retention period",
-                        },
-                    },
-                },
+                "x-gts-traits-schema": "gts://gts.x.test13.t.allres.v1~",
                 "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
+                "properties": {"id": {"type": "string"}},
             },
-            "register base with traits-schema (no defaults)",
+            "register base host attaching trait-type",
         ),
         _register_derived(
-            "gts://gts.x.test13.traits.event.v1~x.test13._.order_event.v1~",
-            "gts://gts.x.test13.traits.event.v1~",
+            "gts://gts.x.test13.h.allres.event.v1~x.test13._.order_event.v1~",
+            "gts://gts.x.test13.h.allres.event.v1~",
             {
-                "type": "object",
                 "x-gts-traits": {
-                    "topicRef": (
-                        "gts.x.core.events.topic.v1~"
-                        "x.test13._.orders.v1"
-                    ),
+                    "topicRef": TOPIC_REF_ORDERS,
                     "retention": "P90D",
                 },
             },
-            "register derived with all traits resolved",
+            "register derived host with all traits resolved",
         ),
         _validate_type_schema(
-            "gts.x.test13.traits.event.v1~x.test13._.order_event.v1~",
+            "gts.x.test13.h.allres.event.v1~x.test13._.order_event.v1~",
             True,
-            "validate derived - all traits resolved",
+            "validate - all traits resolved",
         ),
     ]
 
 
 class TestCaseOp13_TraitsValid_DefaultsUsed(HttpRunner):
-    """OP#13 - Traits: base provides defaults, derived omits them - passes"""
-    config = Config("OP#13 - Traits Defaults Used").base_url(
-        get_gts_base_url()
-    )
+    """OP#13 - trait-type provides defaults for all fields; derived host omits values.
+
+    Defaults fill in, so a non-abstract concrete derived host is still trait-complete.
+    """
+
+    config = Config("OP#13 - Defaults cover all traits").base_url(get_gts_base_url())
 
     def test_start(self):
         super().test_start()
 
     teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.dfl.v1~",
+            _trait_event_meta("dfl"),
+            "register trait-type (all fields default)",
+        ),
         _register(
-            "gts://gts.x.test13.dfl.event.v1~",
+            "gts://gts.x.test13.h.dfl.event.v1~",
             {
                 "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "topicRef": {
-                            "type": "string",
-                            "x-gts-ref": "gts.x.core.events.topic.v1~",
-                            "default": (
-                                "gts.x.core.events.topic.v1~"
-                                "x.core._.default.v1"
-                            ),
-                        },
-                        "retention": {
-                            "type": "string",
-                            "default": "P30D",
-                        },
-                    },
-                },
+                "x-gts-traits-schema": "gts://gts.x.test13.t.dfl.v1~",
                 "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
+                "properties": {"id": {"type": "string"}},
             },
-            "register base with traits-schema (all defaults)",
+            "register base host",
         ),
         _register_derived(
-            "gts://gts.x.test13.dfl.event.v1~x.test13._.simple_event.v1~",
-            "gts://gts.x.test13.dfl.event.v1~",
-            {
-                "type": "object",
-            },
-            "register derived with no x-gts-traits (rely on defaults)",
+            "gts://gts.x.test13.h.dfl.event.v1~x.test13._.simple_event.v1~",
+            "gts://gts.x.test13.h.dfl.event.v1~",
+            {},
+            "register derived host with no x-gts-traits",
         ),
         _validate_type_schema(
-            "gts.x.test13.dfl.event.v1~x.test13._.simple_event.v1~",
+            "gts.x.test13.h.dfl.event.v1~x.test13._.simple_event.v1~",
             True,
-            "validate derived - defaults fill all traits",
+            "validate - defaults satisfy all required fields",
         ),
     ]
 
 
 class TestCaseOp13_TraitsInvalid_MissingRequired(HttpRunner):
-    """OP#13 - Traits: trait property has no default.
-
-    Derived omits it - fails.
+    """OP#13 - trait-type field is `required` and has no default; nothing in the host
+    chain resolves it. Concrete derived host is invalid.
     """
-    config = Config("OP#13 - Missing Required Trait").base_url(
-        get_gts_base_url()
-    )
+
+    config = Config("OP#13 - Missing required trait field").base_url(get_gts_base_url())
 
     def test_start(self):
         super().test_start()
 
     teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.miss.v1~",
+            _trait_event_meta("miss", with_topic_default=False, required=["topicRef"]),
+            "register trait-type (topicRef required, no default)",
+        ),
         _register(
-            "gts://gts.x.test13.miss.event.v1~",
+            "gts://gts.x.test13.h.miss.event.v1~",
             {
                 "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "topicRef": {
-                            "type": "string",
-                            "description": "Required - no default",
-                            "x-gts-ref": "gts.x.core.events.topic.v1~",
-                        },
-                        "retention": {
-                            "type": "string",
-                            "default": "P30D",
-                        },
-                    },
-                },
+                "x-gts-traits-schema": "gts://gts.x.test13.t.miss.v1~",
                 "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
+                "properties": {"id": {"type": "string"}},
             },
-            "register base with one trait without default",
+            "register base host",
         ),
         _register_derived(
-            "gts://gts.x.test13.miss.event.v1~x.test13._.incomplete.v1~",
-            "gts://gts.x.test13.miss.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits": {
-                    "retention": "P90D",
-                },
-            },
-            "register derived missing topicRef trait",
+            "gts://gts.x.test13.h.miss.event.v1~x.test13._.incomplete.v1~",
+            "gts://gts.x.test13.h.miss.event.v1~",
+            {"x-gts-traits": {"retention": "P90D"}},
+            "register concrete derived without topicRef",
         ),
         _validate_type_schema(
-            "gts.x.test13.miss.event.v1~x.test13._.incomplete.v1~",
+            "gts.x.test13.h.miss.event.v1~x.test13._.incomplete.v1~",
             False,
-            "validate should fail - topicRef not resolved",
+            "validate should fail - topicRef unresolved on non-abstract host",
         ),
     ]
 
 
 class TestCaseOp13_TraitsInvalid_WrongType(HttpRunner):
-    """OP#13 - Traits: trait value violates trait schema type - fails"""
-    config = Config("OP#13 - Trait Value Wrong Type").base_url(
-        get_gts_base_url()
-    )
+    """OP#13 - trait value has the wrong JSON type for the trait-type schema. Invalid."""
+
+    config = Config("OP#13 - Trait value wrong type").base_url(get_gts_base_url())
 
     def test_start(self):
         super().test_start()
 
     teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.wtype.v1~",
+            _trait_event_meta("wtype"),
+            "register trait-type",
+        ),
         _register(
-            "gts://gts.x.test13.wtype.event.v1~",
+            "gts://gts.x.test13.h.wtype.event.v1~",
             {
                 "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "maxRetries": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "default": 3,
-                        },
-                        "retention": {
-                            "type": "string",
-                            "default": "P30D",
-                        },
-                    },
-                },
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
+                "x-gts-traits-schema": "gts://gts.x.test13.t.wtype.v1~",
+                "properties": {"id": {"type": "string"}},
             },
-            "register base with integer trait",
+            "register base host",
         ),
         _register_derived(
-            "gts://gts.x.test13.wtype.event.v1~x.test13._.bad_type.v1~",
-            "gts://gts.x.test13.wtype.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits": {
-                    "maxRetries": "not_a_number",
-                    "retention": "P90D",
-                },
-            },
-            "register derived with wrong type for maxRetries",
+            "gts://gts.x.test13.h.wtype.event.v1~x.test13._.wrong_type.v1~",
+            "gts://gts.x.test13.h.wtype.event.v1~",
+            {"x-gts-traits": {"retention": 30}},  # should be string
+            "register derived with int instead of string for retention",
         ),
         _validate_type_schema(
-            "gts.x.test13.wtype.event.v1~x.test13._.bad_type.v1~",
+            "gts.x.test13.h.wtype.event.v1~x.test13._.wrong_type.v1~",
             False,
-            "validate should fail - maxRetries is not integer",
+            "validate should fail - retention is not a string",
         ),
     ]
 
 
 class TestCaseOp13_TraitsInvalid_UnknownProperty(HttpRunner):
-    """OP#13 - Traits: trait value includes unknown property.
+    """OP#13 - trait value provides a key not present in the effective trait-type.
 
-    additionalProperties false - fails.
+    The trait-type has `additionalProperties: false`, so the unknown key is invalid.
     """
-    config = Config("OP#13 - Unknown Trait Property").base_url(
-        get_gts_base_url()
-    )
+
+    config = Config("OP#13 - Unknown trait property").base_url(get_gts_base_url())
 
     def test_start(self):
         super().test_start()
 
     teststeps = [
-        _register(
-            "gts://gts.x.test13.unk.event.v1~",
+        _register_trait_type(
+            "gts://gts.x.test13.t.unkn.v1~",
             {
                 "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "retention": {
-                            "type": "string",
-                            "default": "P30D",
-                        },
-                    },
-                },
-                "required": ["id"],
+                "additionalProperties": False,
                 "properties": {
-                    "id": {"type": "string"},
+                    "retention": {"type": "string", "default": "P30D"},
                 },
             },
-            "register base with closed traits-schema",
+            "register trait-type with additionalProperties=false",
+        ),
+        _register(
+            "gts://gts.x.test13.h.unkn.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": "gts://gts.x.test13.t.unkn.v1~",
+                "properties": {"id": {"type": "string"}},
+            },
+            "register base host",
         ),
         _register_derived(
-            "gts://gts.x.test13.unk.event.v1~x.test13._.extra_trait.v1~",
-            "gts://gts.x.test13.unk.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits": {
-                    "retention": "P90D",
-                    "unknownTrait": "some_value",
-                },
-            },
-            "register derived with unknown trait property",
+            "gts://gts.x.test13.h.unkn.event.v1~x.test13._.unknown_prop.v1~",
+            "gts://gts.x.test13.h.unkn.event.v1~",
+            {"x-gts-traits": {"retention": "P90D", "mysteryKey": "x"}},
+            "register derived with unknown trait key",
         ),
         _validate_type_schema(
-            "gts.x.test13.unk.event.v1~x.test13._.extra_trait.v1~",
+            "gts.x.test13.h.unkn.event.v1~x.test13._.unknown_prop.v1~",
             False,
-            "validate should fail - unknownTrait not in schema",
+            "validate should fail - mysteryKey is not in trait-type",
         ),
     ]
 
 
 class TestCaseOp13_TraitsValid_PartialOverride(HttpRunner):
-    """OP#13 - Traits: derived overrides one trait.
+    """OP#13 - descendant provides a concrete value for a field that the ancestor
+    only had as `default`. This is allowed (default is not a concrete assignment)."""
 
-    Other uses default - passes.
-    """
-    config = Config("OP#13 - Partial Override With Defaults").base_url(
-        get_gts_base_url()
-    )
+    config = Config("OP#13 - Partial override of defaulted ancestor").base_url(get_gts_base_url())
 
     def test_start(self):
         super().test_start()
 
     teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.part.v1~",
+            _trait_event_meta("part"),
+            "register trait-type (defaults present)",
+        ),
         _register(
-            "gts://gts.x.test13.part.event.v1~",
+            "gts://gts.x.test13.h.part.event.v1~",
             {
                 "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "topicRef": {
-                            "type": "string",
-                            "x-gts-ref": "gts.x.core.events.topic.v1~",
-                            "default": (
-                                "gts.x.core.events.topic.v1~"
-                                "x.core._.default.v1"
-                            ),
-                        },
-                        "retention": {
-                            "type": "string",
-                            "default": "P30D",
-                        },
-                    },
-                },
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
+                "x-gts-traits-schema": "gts://gts.x.test13.t.part.v1~",
+                "properties": {"id": {"type": "string"}},
             },
-            "register base with all defaults",
+            "register base host (no x-gts-traits — relies on defaults)",
         ),
         _register_derived(
-            "gts://gts.x.test13.part.event.v1~x.test13._.partial.v1~",
-            "gts://gts.x.test13.part.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits": {
-                    "topicRef": (
-                        "gts.x.core.events.topic.v1~"
-                        "x.test13._.custom.v1"
-                    ),
-                },
-            },
-            "register derived overriding only topicRef",
+            "gts://gts.x.test13.h.part.event.v1~x.test13._.override_default.v1~",
+            "gts://gts.x.test13.h.part.event.v1~",
+            {"x-gts-traits": {"topicRef": TOPIC_REF_ORDERS}},
+            "register derived overriding the default topicRef with a concrete value",
         ),
         _validate_type_schema(
-            "gts.x.test13.part.event.v1~x.test13._.partial.v1~",
+            "gts.x.test13.h.part.event.v1~x.test13._.override_default.v1~",
             True,
-            "validate - topicRef overridden, retention uses default",
+            "validate - first concrete assignment wins; defaults aren't 'set'",
         ),
     ]
 
 
-class TestCaseOp13_TraitsValid_BothKeywordsInSameSchema(HttpRunner):
-    """OP#13 - Traits: mid-level schema has both x-gts-traits-schema.
+class TestCaseOp13_TraitsValid_BaseConcreteSomeFields(HttpRunner):
+    """OP#13 - base host sets some trait values concretely; derived adds the rest.
 
-    And x-gts-traits.
+    (Replaces the old TraitsValid_BothKeywordsInSameSchema test — in the new model
+    `x-gts-traits-schema` lives only on the base, but `x-gts-traits` can appear at
+    any level. The mid-level can both attach a derived trait-type AND set values.)
     """
-    config = Config("OP#13 - Both Keywords Same Schema").base_url(
-        get_gts_base_url()
-    )
+
+    config = Config("OP#13 - Concrete values distributed across chain").base_url(get_gts_base_url())
 
     def test_start(self):
         super().test_start()
 
     teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.distr.v1~",
+            _trait_event_meta("distr", with_topic_default=False, with_retention_default=False),
+            "register trait-type (no defaults)",
+        ),
         _register(
-            "gts://gts.x.test13.both.event.v1~",
+            "gts://gts.x.test13.h.distr.event.v1~",
             {
                 "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "properties": {
-                        "topicRef": {
-                            "type": "string",
-                            "x-gts-ref": "gts.x.core.events.topic.v1~",
-                        },
-                        "retention": {
-                            "type": "string",
-                            "default": "P30D",
-                        },
-                    },
-                },
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
+                "x-gts-traits-schema": "gts://gts.x.test13.t.distr.v1~",
+                "x-gts-traits": {"topicRef": TOPIC_REF_DEFAULT},
+                "x-gts-abstract": True,
+                "properties": {"id": {"type": "string"}},
             },
-            "register base with traits-schema",
+            "register base host with topicRef set (abstract until retention is set)",
         ),
         _register_derived(
-            "gts://gts.x.test13.both.event.v1~x.test13._.audit.v1~",
-            "gts://gts.x.test13.both.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "properties": {
-                        "auditRetention": {
-                            "type": "string",
-                            "default": "P365D",
-                        },
-                    },
-                },
-                "x-gts-traits": {
-                    "topicRef": (
-                        "gts.x.core.events.topic.v1~"
-                        "x.test13._.audit.v1"
-                    ),
-                },
-            },
-            "register mid-level with both keywords",
+            "gts://gts.x.test13.h.distr.event.v1~x.test13._.complete.v1~",
+            "gts://gts.x.test13.h.distr.event.v1~",
+            {"x-gts-traits": {"retention": "P90D"}},
+            "register derived adding retention value",
         ),
         _validate_type_schema(
-            "gts.x.test13.both.event.v1~x.test13._.audit.v1~",
+            "gts.x.test13.h.distr.event.v1~x.test13._.complete.v1~",
             True,
-            "validate mid-level - topicRef resolved, retention has default",
-        ),
-        _register_derived(
-            (
-                "gts://gts.x.test13.both.event.v1~"
-                "x.test13._.audit.v1~"
-                "x.test13._.login_audit.v1~"
-            ),
-            "gts://gts.x.test13.both.event.v1~x.test13._.audit.v1~",
-            {
-                "type": "object",
-                "x-gts-traits": {
-                    "auditRetention": "P730D",
-                },
-            },
-            "register leaf resolving auditRetention",
-        ),
-        _validate_type_schema(
-            (
-                "gts.x.test13.both.event.v1~"
-                "x.test13._.audit.v1~"
-                "x.test13._.login_audit.v1~"
-            ),
-            True,
-            "validate leaf - all traits resolved across chain",
+            "validate - merged values resolve all fields",
         ),
     ]
 
 
 class TestCaseOp13_TraitsInvalid_3Level_MissingInLeaf(HttpRunner):
-    """OP#13 - Traits: 3-level chain.
-
-    Leaf missing trait from mid-level schema - fails.
+    """OP#13 - 3-level chain; intermediate is abstract and underspecified;
+    leaf is concrete but also underspecified. Leaf is invalid.
     """
-    config = Config("OP#13 - 3-Level Missing Trait In Leaf").base_url(
-        get_gts_base_url()
-    )
+
+    config = Config("OP#13 - 3-level chain missing field in leaf").base_url(get_gts_base_url())
 
     def test_start(self):
         super().test_start()
 
     teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.l3miss.v1~",
+            _trait_event_meta("l3miss", with_topic_default=False, with_retention_default=False),
+            "register trait-type (no defaults)",
+        ),
         _register(
-            "gts://gts.x.test13.l3miss.event.v1~",
+            "gts://gts.x.test13.h.l3miss.event.v1~",
             {
                 "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "properties": {
-                        "retention": {
-                            "type": "string",
-                            "default": "P30D",
-                        },
-                    },
-                },
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
+                "x-gts-traits-schema": "gts://gts.x.test13.t.l3miss.v1~",
+                "x-gts-abstract": True,
+                "properties": {"id": {"type": "string"}},
             },
-            "register base",
+            "register abstract base host",
         ),
         _register_derived(
-            "gts://gts.x.test13.l3miss.event.v1~x.test13._.mid.v1~",
-            "gts://gts.x.test13.l3miss.event.v1~",
+            "gts://gts.x.test13.h.l3miss.event.v1~x.test13._.mid.v1~",
+            "gts://gts.x.test13.h.l3miss.event.v1~",
             {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "properties": {
-                        "priority": {
-                            "type": "string",
-                            "description": "No default - must be resolved",
-                        },
-                    },
-                },
+                "x-gts-traits": {"retention": "P60D"},
+                "x-gts-abstract": True,
             },
-            "register mid-level adding priority trait (no default)",
+            "register abstract mid (sets retention only)",
         ),
         _register_derived(
-            (
-                "gts://gts.x.test13.l3miss.event.v1~"
-                "x.test13._.mid.v1~"
-                "x.test13._.leaf_missing.v1~"
-            ),
-            "gts://gts.x.test13.l3miss.event.v1~x.test13._.mid.v1~",
-            {
-                "type": "object",
-                "x-gts-traits": {
-                    "retention": "P90D",
-                },
-            },
-            "register leaf missing priority trait",
+            "gts://gts.x.test13.h.l3miss.event.v1~x.test13._.mid.v1~x.test13._.leaf.v1~",
+            "gts://gts.x.test13.h.l3miss.event.v1~x.test13._.mid.v1~",
+            {},
+            "register concrete leaf without topicRef",
         ),
         _validate_type_schema(
-            (
-                "gts.x.test13.l3miss.event.v1~"
-                "x.test13._.mid.v1~"
-                "x.test13._.leaf_missing.v1~"
-            ),
+            "gts.x.test13.h.l3miss.event.v1~x.test13._.mid.v1~x.test13._.leaf.v1~",
             False,
-            "validate should fail - priority not resolved",
+            "validate should fail - topicRef unresolved at concrete leaf",
         ),
     ]
 
 
 class TestCaseOp13_TraitsInvalid_OverrideInChain(HttpRunner):
-    """OP#13 - Traits: descendant cannot override ancestor trait value."""
-    config = Config("OP#13 - Override In Chain").base_url(get_gts_base_url())
+    """OP#13 - immutable-once-set: descendant cannot change ancestor's concrete trait value."""
+
+    config = Config("OP#13 - Override of concrete ancestor value").base_url(get_gts_base_url())
 
     def test_start(self):
         super().test_start()
 
     teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.ovr.v1~",
+            _trait_event_meta("ovr"),
+            "register trait-type (defaults present)",
+        ),
         _register(
-            "gts://gts.x.test13.ovr.event.v1~",
+            "gts://gts.x.test13.h.ovr.event.v1~",
             {
                 "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "properties": {
-                        "retention": {
-                            "type": "string",
-                        },
-                    },
-                },
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
+                "x-gts-traits-schema": "gts://gts.x.test13.t.ovr.v1~",
+                "x-gts-traits": {"retention": "P30D"},
+                "properties": {"id": {"type": "string"}},
             },
-            "register base",
+            "register base host concretely setting retention=P30D",
         ),
         _register_derived(
-            "gts://gts.x.test13.ovr.event.v1~x.test13._.mid_ovr.v1~",
-            "gts://gts.x.test13.ovr.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits": {
-                    "retention": "P30D",
-                },
-            },
-            "register mid-level setting retention=P30D",
+            "gts://gts.x.test13.h.ovr.event.v1~x.test13._.try_override.v1~",
+            "gts://gts.x.test13.h.ovr.event.v1~",
+            {"x-gts-traits": {"retention": "P90D"}},
+            "register derived attempting to override retention",
         ),
         _validate_type_schema(
-            "gts.x.test13.ovr.event.v1~x.test13._.mid_ovr.v1~",
-            True,
-            "validate mid-level",
-        ),
-        _register_derived(
-            (
-                "gts://gts.x.test13.ovr.event.v1~"
-                "x.test13._.mid_ovr.v1~"
-                "x.test13._.leaf_ovr.v1~"
-            ),
-            "gts://gts.x.test13.ovr.event.v1~x.test13._.mid_ovr.v1~",
-            {
-                "type": "object",
-                "x-gts-traits": {
-                    "retention": "P365D",
-                },
-            },
-            "register leaf overriding retention=P365D",
-        ),
-        _validate_type_schema(
-            (
-                "gts.x.test13.ovr.event.v1~"
-                "x.test13._.mid_ovr.v1~"
-                "x.test13._.leaf_ovr.v1~"
-            ),
+            "gts.x.test13.h.ovr.event.v1~x.test13._.try_override.v1~",
             False,
-            "validate should fail - trait override not allowed",
+            "validate should fail - immutable-once-set violated",
         ),
     ]
 
 
 class TestCaseOp13_TraitsInvalid_OverrideTopicRef3Level(HttpRunner):
-    """OP#13 - Traits: 3-level chain, leaf overrides topicRef.
+    """OP#13 - 3-level chain; mid sets topicRef; leaf tries to change it. Leaf invalid."""
 
-    Mid-level sets topicRef to audit topic, leaf tries notification
-    topic. Validation must fail (immutable-once-set).
-    """
-    config = Config(
-        "OP#13 - Override TopicRef 3-Level"
-    ).base_url(get_gts_base_url())
+    config = Config("OP#13 - 3-level override of topicRef").base_url(get_gts_base_url())
 
     def test_start(self):
         super().test_start()
 
     teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.ovr3.v1~",
+            _trait_event_meta("ovr3"),
+            "register trait-type (defaults present)",
+        ),
         _register(
-            "gts://gts.x.test13.ovt.event.v1~",
+            "gts://gts.x.test13.h.ovr3.event.v1~",
             {
                 "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "properties": {
-                        "topicRef": {
-                            "type": "string",
-                            "x-gts-ref": (
-                                "gts.x.core.events.topic.v1~"
-                            ),
-                        },
-                        "retention": {
-                            "type": "string",
-                            "default": "P30D",
-                        },
-                    },
-                },
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
+                "x-gts-traits-schema": "gts://gts.x.test13.t.ovr3.v1~",
+                "x-gts-abstract": True,
+                "properties": {"id": {"type": "string"}},
             },
-            "register base with topicRef + retention traits",
+            "register abstract base",
         ),
         _register_derived(
-            (
-                "gts://gts.x.test13.ovt.event.v1~"
-                "x.test13._.audit_evt.v1~"
-            ),
-            "gts://gts.x.test13.ovt.event.v1~",
+            "gts://gts.x.test13.h.ovr3.event.v1~x.test13._.audit.v1~",
+            "gts://gts.x.test13.h.ovr3.event.v1~",
             {
-                "type": "object",
-                "x-gts-traits": {
-                    "topicRef": (
-                        "gts.x.core.events.topic.v1~"
-                        "x.core._.audit.v1"
-                    ),
-                },
+                "x-gts-traits": {"topicRef": TOPIC_REF_AUDIT},
+                "x-gts-abstract": True,
             },
-            "register mid-level setting topicRef=audit",
-        ),
-        _validate_type_schema(
-            (
-                "gts.x.test13.ovt.event.v1~"
-                "x.test13._.audit_evt.v1~"
-            ),
-            True,
-            "validate mid-level - topicRef set",
+            "register abstract mid concretely setting topicRef=audit",
         ),
         _register_derived(
-            (
-                "gts://gts.x.test13.ovt.event.v1~"
-                "x.test13._.audit_evt.v1~"
-                "x.test13._.most_derived.v1~"
-            ),
-            (
-                "gts://gts.x.test13.ovt.event.v1~"
-                "x.test13._.audit_evt.v1~"
-            ),
-            {
-                "type": "object",
-                "x-gts-traits": {
-                    "topicRef": (
-                        "gts.x.core.events.topic.v1~"
-                        "x.core._.notification.v1"
-                    ),
-                },
-            },
-            "register leaf overriding topicRef=notification",
+            "gts://gts.x.test13.h.ovr3.event.v1~x.test13._.audit.v1~x.test13._.notif_leaf.v1~",
+            "gts://gts.x.test13.h.ovr3.event.v1~x.test13._.audit.v1~",
+            {"x-gts-traits": {"topicRef": TOPIC_REF_NOTIF}},
+            "register leaf attempting to change topicRef",
         ),
         _validate_type_schema(
-            (
-                "gts.x.test13.ovt.event.v1~"
-                "x.test13._.audit_evt.v1~"
-                "x.test13._.most_derived.v1~"
-            ),
+            "gts.x.test13.h.ovr3.event.v1~x.test13._.audit.v1~x.test13._.notif_leaf.v1~",
             False,
-            "validate should fail - topicRef override not allowed",
+            "validate should fail - leaf overrides mid's concrete topicRef",
         ),
     ]
 
 
 class TestCaseOp13_TraitsInvalid_ChangeDefaultInMid(HttpRunner):
-    """OP#13 - Traits: mid-level changes default set by base.
+    """OP#13 - changing a `default` declared in an ancestor trait-type is forbidden.
 
-    Base sets retention default=P30D. Mid-level redeclares
-    retention default=P90D. Validation must fail - defaults
-    set by ancestor are immutable.
+    Expressed via parallel trait-type derivation: a derived trait-type that redeclares
+    a property with a different `default` is invalid (OP#12 on the trait-type chain).
     """
-    config = Config(
-        "OP#13 - Change Default In Mid-Level"
-    ).base_url(get_gts_base_url())
+
+    config = Config("OP#13 - Default override in derived trait-type").base_url(get_gts_base_url())
 
     def test_start(self):
         super().test_start()
 
     teststeps = [
-        _register(
-            "gts://gts.x.test13.chdfl.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "properties": {
-                        "retention": {
-                            "type": "string",
-                            "default": "P30D",
-                        },
-                        "topicRef": {
-                            "type": "string",
-                        },
-                    },
-                },
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
-            },
-            "register base with retention default=P30D",
+        _register_trait_type(
+            "gts://gts.x.test13.t.chgdfl.v1~",
+            _trait_event_meta("chgdfl"),
+            "register base trait-type (retention default=P30D)",
         ),
-        _register_derived(
-            (
-                "gts://gts.x.test13.chdfl.event.v1~"
-                "x.test13._.chdfl_mid.v1~"
-            ),
-            "gts://gts.x.test13.chdfl.event.v1~",
+        # derived trait-type changing the default for retention to P365D — invalid
+        _post_schema_raw(
             {
+                "$$id": "gts://gts.x.test13.t.chgdfl.v1~x.test13._.bad.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
                 "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "properties": {
-                        "retention": {
-                            "type": "string",
-                            "default": "P90D",
-                        },
-                    },
-                },
-                "x-gts-traits": {
-                    "topicRef": (
-                        "gts.x.core.events.topic.v1~"
-                        "x.test13._.orders.v1"
-                    ),
+                "allOf": [{"$$ref": "gts://gts.x.test13.t.chgdfl.v1~"}],
+                "properties": {
+                    "retention": {"type": "string", "default": "P365D"},
                 },
             },
-            "register mid changing retention default to P90D",
+            "register derived trait-type changing retention default",
         ),
         _validate_type_schema(
-            (
-                "gts.x.test13.chdfl.event.v1~"
-                "x.test13._.chdfl_mid.v1~"
-            ),
+            "gts.x.test13.t.chgdfl.v1~x.test13._.bad.v1~",
             False,
-            "validate should fail - default override not allowed",
+            "validate should fail - default redeclared with different value",
         ),
     ]
 
 
 class TestCaseOp13_TraitsInvalid_ConstraintViolation(HttpRunner):
-    """OP#13 - Traits: trait value violates enum constraint.
+    """OP#13 - trait value violates a JSON Schema constraint declared in the trait-type."""
 
-    In trait schema - fails.
-    """
-    config = Config("OP#13 - Trait Constraint Violation").base_url(
-        get_gts_base_url()
-    )
+    config = Config("OP#13 - Trait value constraint violation").base_url(get_gts_base_url())
 
     def test_start(self):
         super().test_start()
 
     teststeps = [
-        _register(
-            "gts://gts.x.test13.enum.event.v1~",
+        _register_trait_type(
+            "gts://gts.x.test13.t.cstr.v1~",
             {
                 "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "priority": {
-                            "type": "string",
-                            "enum": ["low", "medium", "high", "critical"],
-                            "default": "medium",
-                        },
-                        "retention": {
-                            "type": "string",
-                            "default": "P30D",
-                        },
+                "properties": {
+                    "retentionDays": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 3650,
+                        "default": 30,
                     },
                 },
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
             },
-            "register base with enum-constrained trait",
+            "register trait-type (retentionDays 1..3650)",
         ),
-        _register_derived(
-            "gts://gts.x.test13.enum.event.v1~x.test13._.bad_enum.v1~",
-            "gts://gts.x.test13.enum.event.v1~",
+        _register(
+            "gts://gts.x.test13.h.cstr.event.v1~",
             {
                 "type": "object",
-                "x-gts-traits": {
-                    "priority": "ultra_high",
-                    "retention": "P90D",
-                },
+                "x-gts-traits-schema": "gts://gts.x.test13.t.cstr.v1~",
+                "properties": {"id": {"type": "string"}},
             },
-            "register derived with invalid enum value",
+            "register base host",
+        ),
+        _register_derived(
+            "gts://gts.x.test13.h.cstr.event.v1~x.test13._.too_long.v1~",
+            "gts://gts.x.test13.h.cstr.event.v1~",
+            {"x-gts-traits": {"retentionDays": 99999}},
+            "register derived with retentionDays out of range",
         ),
         _validate_type_schema(
-            "gts.x.test13.enum.event.v1~x.test13._.bad_enum.v1~",
+            "gts.x.test13.h.cstr.event.v1~x.test13._.too_long.v1~",
             False,
-            "validate should fail - priority not in enum",
-        ),
-    ]
-
-
-class TestCaseOp13_TraitsValid_ValidateEntity(HttpRunner):
-    """OP#13 - Traits: validate-entity endpoint also checks traits"""
-    config = Config("OP#13 - Validate Entity With Traits").base_url(
-        get_gts_base_url()
-    )
-
-    def test_start(self):
-        super().test_start()
-
-    teststeps = [
-        _register(
-            "gts://gts.x.test13.ent.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "topicRef": {
-                            "type": "string",
-                            "x-gts-ref": "gts.x.core.events.topic.v1~",
-                        },
-                        "retention": {
-                            "type": "string",
-                            "default": "P30D",
-                        },
-                    },
-                },
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
-            },
-            "register base",
-        ),
-        _register_derived(
-            "gts://gts.x.test13.ent.event.v1~x.test13._.good_ent.v1~",
-            "gts://gts.x.test13.ent.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits": {
-                    "topicRef": (
-                        "gts.x.core.events.topic.v1~"
-                        "x.test13._.orders.v1"
-                    ),
-                    "retention": "P90D",
-                },
-            },
-            "register derived with traits",
-        ),
-        _validate_entity(
-            "gts.x.test13.ent.event.v1~x.test13._.good_ent.v1~",
-            True,
-            "validate-entity should pass",
-        ),
-    ]
-
-
-class TestCaseOp13_TraitsInvalid_ValidateEntity_MissingTrait(HttpRunner):
-    """OP#13 - Traits: validate-entity catches missing trait"""
-    config = Config("OP#13 - Validate Entity Missing Trait").base_url(
-        get_gts_base_url()
-    )
-
-    def test_start(self):
-        super().test_start()
-
-    teststeps = [
-        _register(
-            "gts://gts.x.test13.entm.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "topicRef": {
-                            "type": "string",
-                            "x-gts-ref": "gts.x.core.events.topic.v1~",
-                        },
-                        "retention": {
-                            "type": "string",
-                        },
-                    },
-                },
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
-            },
-            "register base (no defaults)",
-        ),
-        _register_derived(
-            "gts://gts.x.test13.entm.event.v1~x.test13._.bad_ent.v1~",
-            "gts://gts.x.test13.entm.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits": {
-                    "topicRef": (
-                        "gts.x.core.events.topic.v1~"
-                        "x.test13._.orders.v1"
-                    ),
-                },
-            },
-            "register derived missing retention",
-        ),
-        _validate_entity(
-            "gts.x.test13.entm.event.v1~x.test13._.bad_ent.v1~",
-            False,
-            "validate-entity should fail - retention not resolved",
-        ),
-    ]
-
-
-class TestCaseOp13_TraitsValid_BaseSchemaNoTraits(HttpRunner):
-    """OP#13 - Traits: base has no traits-schema.
-
-    Derived has no traits - passes.
-    """
-    config = Config("OP#13 - No Traits At All").base_url(get_gts_base_url())
-
-    def test_start(self):
-        super().test_start()
-
-    teststeps = [
-        _register(
-            "gts://gts.x.test13.notr.event.v1~",
-            {
-                "type": "object",
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
-            },
-            "register base without traits-schema",
-        ),
-        _register_derived(
-            "gts://gts.x.test13.notr.event.v1~x.test13._.plain.v1~",
-            "gts://gts.x.test13.notr.event.v1~",
-            {
-                "type": "object",
-                "properties": {
-                    "extra": {"type": "string"},
-                },
-            },
-            "register derived without traits",
-        ),
-        _validate_type_schema(
-            "gts.x.test13.notr.event.v1~x.test13._.plain.v1~",
-            True,
-            "validate - no traits to check, should pass",
+            "validate should fail - 99999 exceeds maximum",
         ),
     ]
 
 
 class TestCaseOp13_TraitsInvalid_MinimumViolation(HttpRunner):
-    """OP#13 - Traits: integer trait violates minimum constraint - fails"""
-    config = Config("OP#13 - Trait Minimum Violation").base_url(
+    """OP#13 - integer trait value below the minimum constraint."""
+
+    config = Config("OP#13 - Minimum violation").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.mn.v1~",
+            {
+                "type": "object",
+                "properties": {
+                    "retentionDays": {
+                        "type": "integer",
+                        "minimum": 7,
+                        "default": 30,
+                    },
+                },
+            },
+            "register trait-type",
+        ),
+        _register(
+            "gts://gts.x.test13.h.mn.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": "gts://gts.x.test13.t.mn.v1~",
+                "properties": {"id": {"type": "string"}},
+            },
+            "register base host",
+        ),
+        _register_derived(
+            "gts://gts.x.test13.h.mn.event.v1~x.test13._.too_short.v1~",
+            "gts://gts.x.test13.h.mn.event.v1~",
+            {"x-gts-traits": {"retentionDays": 1}},
+            "register derived with retentionDays below minimum",
+        ),
+        _validate_type_schema(
+            "gts.x.test13.h.mn.event.v1~x.test13._.too_short.v1~",
+            False,
+            "validate should fail - 1 < minimum 7",
+        ),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Trait-type derivation via parallel inheritance (replaces "ref-based" /
+# "narrowing" / "AP-blocks-extension" composition tests of the old model)
+# ---------------------------------------------------------------------------
+
+
+class TestCaseOp13_TraitTypeDerivation_Narrowing_Valid(HttpRunner):
+    """OP#13 - derived trait-type may narrow constraints (compatible refinement).
+
+    Replaces TraitsValid_NarrowingInDerived from the old model.
+    """
+
+    config = Config("OP#13 - Trait-type narrowing accepted").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.narrow.v1~",
+            {
+                "type": "object",
+                "properties": {
+                    "retentionDays": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 3650,
+                        "default": 30,
+                    },
+                },
+            },
+            "register base trait-type",
+        ),
+        # derived trait-type tightening the range
+        _post_schema_raw(
+            {
+                "$$id": "gts://gts.x.test13.t.narrow.v1~x.test13._.shortlived.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [{"$$ref": "gts://gts.x.test13.t.narrow.v1~"}],
+                "properties": {
+                    "retentionDays": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 30,
+                        "default": 30,
+                    },
+                },
+            },
+            "register derived trait-type narrowing maximum to 30",
+        ),
+        _validate_type_schema(
+            "gts.x.test13.t.narrow.v1~x.test13._.shortlived.v1~",
+            True,
+            "validate - narrowing is a valid OP#12 derivation",
+        ),
+    ]
+
+
+class TestCaseOp13_TraitTypeDerivation_LooseningViolation(HttpRunner):
+    """OP#13 - derived trait-type cannot loosen a constraint of its parent.
+
+    Replaces TraitsInvalid_NarrowingViolation.
+    """
+
+    config = Config("OP#13 - Trait-type loosening rejected").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.loose.v1~",
+            {
+                "type": "object",
+                "properties": {
+                    "retentionDays": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 30,
+                        "default": 30,
+                    },
+                },
+            },
+            "register base trait-type (max=30)",
+        ),
+        _post_schema_raw(
+            {
+                "$$id": "gts://gts.x.test13.t.loose.v1~x.test13._.longer.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [{"$$ref": "gts://gts.x.test13.t.loose.v1~"}],
+                "properties": {
+                    "retentionDays": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 3650,
+                        "default": 30,
+                    },
+                },
+            },
+            "register derived trait-type loosening max to 3650",
+        ),
+        _validate_type_schema(
+            "gts.x.test13.t.loose.v1~x.test13._.longer.v1~",
+            False,
+            "validate should fail - loosening violates OP#12",
+        ),
+    ]
+
+
+class TestCaseOp13_TraitTypeDerivation_ExtendField_Valid(HttpRunner):
+    """OP#13 - derived trait-type can add new fields (replaces RefBasedTraitSchema).
+
+    A derived trait-type adds an `auditRetention` field; host hierarchy resolves it.
+    """
+
+    config = Config("OP#13 - Trait-type extends with new field").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.ext.v1~",
+            _trait_event_meta("ext"),
+            "register base trait-type",
+        ),
+        _post_schema_raw(
+            {
+                "$$id": "gts://gts.x.test13.t.ext.v1~x.test13._.audited.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [{"$$ref": "gts://gts.x.test13.t.ext.v1~"}],
+                "properties": {
+                    "auditRetention": {"type": "string", "default": "P365D"},
+                },
+            },
+            "register derived trait-type adding auditRetention",
+        ),
+        _validate_type_schema(
+            "gts.x.test13.t.ext.v1~x.test13._.audited.v1~",
+            True,
+            "validate derived trait-type",
+        ),
+    ]
+
+
+class TestCaseOp13_TraitTypeDerivation_DefaultsInherited_Valid(HttpRunner):
+    """OP#13 - defaults declared in a base trait-type are visible through derivation.
+
+    Replaces TraitsValid_DefaultsFromRefSchema.
+    """
+
+    config = Config("OP#13 - Defaults from base trait-type cover derived").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.dflinh.v1~",
+            _trait_event_meta("dflinh"),
+            "register base trait-type (defaults)",
+        ),
+        _post_schema_raw(
+            {
+                "$$id": "gts://gts.x.test13.t.dflinh.v1~x.test13._.audited.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [{"$$ref": "gts://gts.x.test13.t.dflinh.v1~"}],
+                "properties": {
+                    "auditRetention": {"type": "string", "default": "P365D"},
+                },
+            },
+            "register derived trait-type adding auditRetention (default)",
+        ),
+        _register(
+            "gts://gts.x.test13.h.dflinh.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": "gts://gts.x.test13.t.dflinh.v1~x.test13._.audited.v1~",
+                "properties": {"id": {"type": "string"}},
+            },
+            "register host attaching the derived trait-type",
+        ),
+        _validate_type_schema(
+            "gts.x.test13.h.dflinh.event.v1~",
+            True,
+            "validate - all defaults inherited, host is trait-complete",
+        ),
+    ]
+
+
+class TestCaseOp13_TraitsInvalid_RefBasedMissingTrait(HttpRunner):
+    """OP#13 - trait-type required field with no default; derived host doesn't set it.
+
+    Replaces TraitsInvalid_RefBasedMissingTrait under the new model.
+    """
+
+    config = Config("OP#13 - Required field in trait-type unresolved").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.reqf.v1~",
+            {
+                "type": "object",
+                "required": ["topicRef"],
+                "properties": {
+                    "topicRef": {"type": "string"},
+                    "retention": {"type": "string", "default": "P30D"},
+                },
+            },
+            "register trait-type with required topicRef and no default",
+        ),
+        _register(
+            "gts://gts.x.test13.h.reqf.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": "gts://gts.x.test13.t.reqf.v1~",
+                "properties": {"id": {"type": "string"}},
+            },
+            "register base host (no traits provided)",
+        ),
+        _validate_type_schema(
+            "gts.x.test13.h.reqf.event.v1~",
+            False,
+            "validate should fail - concrete host with unresolved required field",
+        ),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Parallel derivation (host-type and trait-type chains run in parallel)
+# ---------------------------------------------------------------------------
+
+
+class TestCaseOp13_ParallelDerivation_DescendantTraitTypeDerivedFromAncestor_Ok(HttpRunner):
+    """OP#13 §9.7.4 - descendant host's trait-type is derived from ancestor's. Valid."""
+
+    config = Config("OP#13 - Parallel derivation OK").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.pard.base.v1~",
+            _trait_event_meta("pardbase"),
+            "register base trait-type",
+        ),
+        _post_schema_raw(
+            {
+                "$$id": "gts://gts.x.test13.t.pard.base.v1~x.test13._.audit_meta.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [{"$$ref": "gts://gts.x.test13.t.pard.base.v1~"}],
+                "properties": {
+                    "auditRetention": {"type": "string", "default": "P365D"},
+                },
+            },
+            "register derived trait-type adding auditRetention",
+        ),
+        _register(
+            "gts://gts.x.test13.h.pard.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": "gts://gts.x.test13.t.pard.base.v1~",
+                "properties": {"id": {"type": "string"}},
+            },
+            "register host base attaching base trait-type",
+        ),
+        _register_derived(
+            "gts://gts.x.test13.h.pard.event.v1~x.test13._.audit_evt.v1~",
+            "gts://gts.x.test13.h.pard.event.v1~",
+            {
+                "x-gts-traits-schema": "gts://gts.x.test13.t.pard.base.v1~x.test13._.audit_meta.v1~",
+            },
+            "register derived host attaching derived trait-type (parallel chain)",
+        ),
+        _validate_type_schema(
+            "gts.x.test13.h.pard.event.v1~x.test13._.audit_evt.v1~",
+            True,
+            "validate - parallel derivation is valid",
+        ),
+    ]
+
+
+class TestCaseOp13_ParallelDerivation_DescendantTraitTypeNotDerived_Rejected(HttpRunner):
+    """OP#13 §9.7.4 - descendant attaches a trait-type that is NOT derived from
+    the ancestor's trait-type. Parallel-derivation rule violated.
+    """
+
+    config = Config("OP#13 - Parallel derivation: unrelated trait-type rejected").base_url(
         get_gts_base_url()
     )
 
@@ -996,1092 +937,782 @@ class TestCaseOp13_TraitsInvalid_MinimumViolation(HttpRunner):
         super().test_start()
 
     teststeps = [
-        _register(
-            "gts://gts.x.test13.minv.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "maxRetries": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 10,
-                            "default": 3,
-                        },
-                    },
-                },
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
-            },
-            "register base with integer trait with min/max",
+        _register_trait_type(
+            "gts://gts.x.test13.t.parX.familyA.v1~",
+            _trait_event_meta("parXa"),
+            "register trait-type family A",
         ),
-        _register_derived(
-            "gts://gts.x.test13.minv.event.v1~x.test13._.neg_retry.v1~",
-            "gts://gts.x.test13.minv.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits": {
-                    "maxRetries": -1,
-                },
-            },
-            "register derived with negative maxRetries",
-        ),
-        _validate_type_schema(
-            "gts.x.test13.minv.event.v1~x.test13._.neg_retry.v1~",
-            False,
-            "validate should fail - maxRetries below minimum",
-        ),
-    ]
-
-
-class TestCaseOp13_TraitsValid_RefBasedTraitSchema(HttpRunner):
-    """OP#13 - Traits: base uses $ref to standalone reusable trait schemas"""
-    config = Config(
-        "OP#13 - Ref-Based Trait Schema"
-    ).base_url(get_gts_base_url())
-
-    def test_start(self):
-        super().test_start()
-
-    teststeps = [
-        # Register standalone reusable trait schema: RetentionTrait
-        _register(
-            "gts://gts.x.test13.traits.retention.v1~",
-            {
-                "type": "object",
-                "properties": {
-                    "retention": {
-                        "description": "ISO 8601 retention duration.",
-                        "type": "string",
-                        "default": "P30D",
-                    },
-                },
-            },
-            "register standalone RetentionTrait schema",
-        ),
-        # Register standalone reusable trait schema: TopicTrait
-        _register(
-            "gts://gts.x.test13.traits.topic.v1~",
-            {
-                "type": "object",
-                "properties": {
-                    "topicRef": {
-                        "description": "Topic reference.",
-                        "type": "string",
-                        "x-gts-ref": "gts.x.core.events.topic.v1~",
-                    },
-                },
-            },
-            "register standalone TopicTrait schema",
-        ),
-        # Register base that composes traits via $ref + allOf
-        _register(
-            "gts://gts.x.test13.ref.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "allOf": [
-                        {
-                            "$$ref": (
-                                "gts://gts.x.test13"
-                                ".traits.retention.v1~"
-                            ),
-                        },
-                        {
-                            "$$ref": (
-                                "gts://gts.x.test13"
-                                ".traits.topic.v1~"
-                            ),
-                        },
-                    ],
-                },
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
-            },
-            "register base with $ref trait schemas",
-        ),
-        # Derived provides all trait values
-        _register_derived(
-            (
-                "gts://gts.x.test13.ref.event.v1~"
-                "x.test13._.ref_leaf.v1~"
-            ),
-            "gts://gts.x.test13.ref.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits": {
-                    "topicRef": (
-                        "gts.x.core.events.topic.v1~"
-                        "x.test13._.orders.v1"
-                    ),
-                    "retention": "P90D",
-                },
-            },
-            "register derived resolving $ref traits",
-        ),
-        _validate_type_schema(
-            (
-                "gts.x.test13.ref.event.v1~"
-                "x.test13._.ref_leaf.v1~"
-            ),
-            True,
-            "validate - $ref traits resolved",
-        ),
-    ]
-
-
-class TestCaseOp13_TraitsInvalid_RefBasedMissingTrait(HttpRunner):
-    """OP#13 - Traits: $ref trait schema, derived missing required trait"""
-    config = Config(
-        "OP#13 - Ref-Based Missing Trait"
-    ).base_url(get_gts_base_url())
-
-    def test_start(self):
-        super().test_start()
-
-    teststeps = [
-        _register(
-            "gts://gts.x.test13.traits.retention.v1~",
-            {
-                "type": "object",
-                "properties": {
-                    "retention": {
-                        "description": (
-                            "ISO 8601 retention duration."
-                        ),
-                        "type": "string",
-                        "default": "P30D",
-                    },
-                },
-            },
-            "register standalone RetentionTrait schema",
+        _register_trait_type(
+            "gts://gts.x.test13.t.parX.familyB.v1~",
+            _trait_event_meta("parXb"),
+            "register trait-type family B (unrelated to A)",
         ),
         _register(
-            "gts://gts.x.test13.traits.topic.v1~",
+            "gts://gts.x.test13.h.parX.event.v1~",
             {
                 "type": "object",
-                "properties": {
-                    "topicRef": {
-                        "description": "Topic reference.",
-                        "type": "string",
-                        "x-gts-ref": (
-                            "gts.x.core.events.topic.v1~"
-                        ),
-                    },
-                },
-            },
-            "register standalone TopicTrait schema",
-        ),
-        _register(
-            "gts://gts.x.test13.refm.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "allOf": [
-                        {
-                            "$$ref": (
-                                "gts://gts.x.test13"
-                                ".traits.retention.v1~"
-                            ),
-                        },
-                        {
-                            "$$ref": (
-                                "gts://gts.x.test13"
-                                ".traits.topic.v1~"
-                            ),
-                        },
-                    ],
-                },
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
-            },
-            "register base with $ref trait schemas",
-        ),
-        # Derived only provides retention, missing topicRef
-        _register_derived(
-            (
-                "gts://gts.x.test13.refm.event.v1~"
-                "x.test13._.ref_incomplete.v1~"
-            ),
-            "gts://gts.x.test13.refm.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits": {
-                    "retention": "P90D",
-                },
-            },
-            "register derived missing topicRef from $ref trait",
-        ),
-        _validate_type_schema(
-            (
-                "gts.x.test13.refm.event.v1~"
-                "x.test13._.ref_incomplete.v1~"
-            ),
-            False,
-            "validate should fail - topicRef not resolved",
-        ),
-    ]
-
-
-class TestCaseOp13_TraitsValid_NarrowingInDerived(HttpRunner):
-    """OP#13 - Traits: derived narrows trait schema (adds constraints)"""
-    config = Config(
-        "OP#13 - Trait Schema Narrowing"
-    ).base_url(get_gts_base_url())
-
-    def test_start(self):
-        super().test_start()
-
-    teststeps = [
-        _register(
-            "gts://gts.x.test13.narrow.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "properties": {
-                        "priority": {
-                            "type": "string",
-                            "description": "Processing priority.",
-                        },
-                        "retention": {
-                            "type": "string",
-                            "default": "P30D",
-                        },
-                    },
-                },
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
-            },
-            "register base with open priority trait",
-        ),
-        # Mid-level narrows priority to enum
-        _register_derived(
-            (
-                "gts://gts.x.test13.narrow.event.v1~"
-                "x.test13._.mid_narrow.v1~"
-            ),
-            "gts://gts.x.test13.narrow.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "properties": {
-                        "priority": {
-                            "type": "string",
-                            "enum": [
-                                "low", "medium",
-                                "high", "critical",
-                            ],
-                        },
-                    },
-                },
-                "x-gts-traits": {
-                    "priority": "high",
-                },
-            },
-            "register mid-level narrowing priority to enum",
-        ),
-        _validate_type_schema(
-            (
-                "gts.x.test13.narrow.event.v1~"
-                "x.test13._.mid_narrow.v1~"
-            ),
-            True,
-            "validate - narrowed trait with valid value",
-        ),
-        # Leaf provides value within narrowed enum
-        _register_derived(
-            (
-                "gts://gts.x.test13.narrow.event.v1~"
-                "x.test13._.mid_narrow.v1~"
-                "x.test13._.leaf_narrow.v1~"
-            ),
-            (
-                "gts://gts.x.test13.narrow.event.v1~"
-                "x.test13._.mid_narrow.v1~"
-            ),
-            {
-                "type": "object",
-                "x-gts-traits": {
-                    "priority": "critical",
-                },
-            },
-            "register leaf with valid narrowed priority",
-        ),
-        _validate_type_schema(
-            (
-                "gts.x.test13.narrow.event.v1~"
-                "x.test13._.mid_narrow.v1~"
-                "x.test13._.leaf_narrow.v1~"
-            ),
-            True,
-            "validate leaf - priority within narrowed enum",
-        ),
-    ]
-
-
-class TestCaseOp13_TraitsInvalid_NarrowingViolation(HttpRunner):
-    """OP#13 - Traits: leaf value violates narrowed enum from mid-level"""
-    config = Config(
-        "OP#13 - Narrowing Violation"
-    ).base_url(get_gts_base_url())
-
-    def test_start(self):
-        super().test_start()
-
-    teststeps = [
-        _register(
-            "gts://gts.x.test13.nv.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "properties": {
-                        "priority": {
-                            "type": "string",
-                        },
-                        "retention": {
-                            "type": "string",
-                            "default": "P30D",
-                        },
-                    },
-                },
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
-            },
-            "register base",
-        ),
-        _register_derived(
-            (
-                "gts://gts.x.test13.nv.event.v1~"
-                "x.test13._.mid_nv.v1~"
-            ),
-            "gts://gts.x.test13.nv.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "properties": {
-                        "priority": {
-                            "type": "string",
-                            "enum": [
-                                "low", "medium",
-                                "high", "critical",
-                            ],
-                        },
-                    },
-                },
-                "x-gts-traits": {
-                    "priority": "high",
-                },
-            },
-            "register mid-level narrowing priority",
-        ),
-        _register_derived(
-            (
-                "gts://gts.x.test13.nv.event.v1~"
-                "x.test13._.mid_nv.v1~"
-                "x.test13._.leaf_bad_nv.v1~"
-            ),
-            (
-                "gts://gts.x.test13.nv.event.v1~"
-                "x.test13._.mid_nv.v1~"
-            ),
-            {
-                "type": "object",
-                "x-gts-traits": {
-                    "priority": "ultra_high",
-                },
-            },
-            "register leaf with value outside narrowed enum",
-        ),
-        _validate_type_schema(
-            (
-                "gts.x.test13.nv.event.v1~"
-                "x.test13._.mid_nv.v1~"
-                "x.test13._.leaf_bad_nv.v1~"
-            ),
-            False,
-            "validate should fail - priority not in enum",
-        ),
-    ]
-
-
-class TestCaseOp13_TraitsValid_DefaultsFromRefSchema(HttpRunner):
-    """OP#13 - Traits: defaults from $ref trait schema fill values"""
-    config = Config(
-        "OP#13 - Defaults From Ref Schema"
-    ).base_url(get_gts_base_url())
-
-    def test_start(self):
-        super().test_start()
-
-    teststeps = [
-        # Use the standalone RetentionTrait (default P30D)
-        # and TopicTrait (no default) registered earlier
-        _register(
-            "gts://gts.x.test13.refd.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "allOf": [
-                        {
-                            "$$ref": (
-                                "gts://gts.x.test13"
-                                ".traits.retention.v1~"
-                            ),
-                        },
-                    ],
-                },
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
-            },
-            "register base with $ref retention trait only",
-        ),
-        # Derived provides no traits - retention default fills
-        _register_derived(
-            (
-                "gts://gts.x.test13.refd.event.v1~"
-                "x.test13._.default_ref.v1~"
-            ),
-            "gts://gts.x.test13.refd.event.v1~",
-            {
-                "type": "object",
-            },
-            "register derived with no traits (rely on $ref default)",
-        ),
-        _validate_type_schema(
-            (
-                "gts.x.test13.refd.event.v1~"
-                "x.test13._.default_ref.v1~"
-            ),
-            True,
-            "validate - retention default from $ref schema fills",
-        ),
-    ]
-
-
-class TestCaseOp13_TraitsInvalid_APBlocksExtension(HttpRunner):
-    """OP#13 - Traits: base additionalProperties=false blocks extension."""
-    config = Config(
-        "OP#13 - Traits additionalProperties Blocks Extension"
-    ).base_url(get_gts_base_url())
-
-    def test_start(self):
-        super().test_start()
-
-    teststeps = [
-        _register(
-            "gts://gts.x.test13.ap.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "retention": {"type": "string"},
-                    },
-                },
-                "required": ["id"],
+                "x-gts-traits-schema": "gts://gts.x.test13.t.parX.familyA.v1~",
                 "properties": {"id": {"type": "string"}},
             },
-            "register base with traits-schema additionalProperties=false",
+            "register host base attaching trait-type family A",
         ),
         _register_derived(
-            "gts://gts.x.test13.ap.event.v1~x.test13._.ap_mid.v1~",
-            "gts://gts.x.test13.ap.event.v1~",
+            "gts://gts.x.test13.h.parX.event.v1~x.test13._.swap.v1~",
+            "gts://gts.x.test13.h.parX.event.v1~",
             {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "properties": {
-                        "topicRef": {
-                            "type": "string",
-                            "x-gts-ref": "gts.x.core.events.topic.v1~",
-                        },
-                    },
-                },
-                "x-gts-traits": {
-                    "retention": "P30D",
-                    "topicRef": (
-                        "gts.x.core.events.topic.v1~"
-                        "x.test13._.orders.v1"
-                    ),
-                },
+                "x-gts-traits-schema": "gts://gts.x.test13.t.parX.familyB.v1~",
             },
-            "register mid-level that extends trait schema with topicRef",
+            "register derived host attaching unrelated trait-type family B",
         ),
         _validate_type_schema(
-            "gts.x.test13.ap.event.v1~x.test13._.ap_mid.v1~",
+            "gts.x.test13.h.parX.event.v1~x.test13._.swap.v1~",
             False,
-            (
-                "validate should fail - base additionalProperties=false "
-                "blocks topicRef"
-            ),
+            "validate should fail - trait-type not in parent's chain",
+        ),
+    ]
+
+
+class TestCaseOp13_ParallelDerivation_DescendantOverridesDefaulted_Ok(HttpRunner):
+    """OP#13 - ancestor relied on `default`; descendant provides a concrete value.
+
+    This is allowed (default is not a concrete assignment).
+    """
+
+    config = Config("OP#13 - Default override is first concrete assignment").base_url(
+        get_gts_base_url()
+    )
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.parovr.v1~",
+            _trait_event_meta("parovr"),
+            "register trait-type (defaults)",
+        ),
+        _register(
+            "gts://gts.x.test13.h.parovr.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": "gts://gts.x.test13.t.parovr.v1~",
+                "properties": {"id": {"type": "string"}},
+            },
+            "register base host (no traits set; defaults apply)",
+        ),
+        _register_derived(
+            "gts://gts.x.test13.h.parovr.event.v1~x.test13._.concrete.v1~",
+            "gts://gts.x.test13.h.parovr.event.v1~",
+            {"x-gts-traits": {"retention": "P365D"}},
+            "register derived providing concrete retention",
+        ),
+        _validate_type_schema(
+            "gts.x.test13.h.parovr.event.v1~x.test13._.concrete.v1~",
+            True,
+            "validate - defaults are not 'set'; descendant may assign",
+        ),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Abstract / concrete trait completeness (validity-by-definition rule)
+# ---------------------------------------------------------------------------
+
+
+class TestCaseOp13_AbstractHost_RequiredTraitUnresolved_Ok(HttpRunner):
+    """OP#13 §9.7.5 - x-gts-abstract:true host is exempt from completeness checks."""
+
+    config = Config("OP#13 - Abstract host with unresolved traits OK").base_url(
+        get_gts_base_url()
+    )
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.absok.v1~",
+            {
+                "type": "object",
+                "required": ["topicRef"],
+                "properties": {
+                    "topicRef": {"type": "string"},
+                },
+            },
+            "register trait-type with required topicRef (no default)",
+        ),
+        _register(
+            "gts://gts.x.test13.h.absok.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": "gts://gts.x.test13.t.absok.v1~",
+                "x-gts-abstract": True,
+                "properties": {"id": {"type": "string"}},
+            },
+            "register abstract base host (no x-gts-traits)",
+        ),
+        _validate_type_schema(
+            "gts.x.test13.h.absok.event.v1~",
+            True,
+            "validate - abstract types are exempt from completeness",
+        ),
+    ]
+
+
+class TestCaseOp13_AbstractToConcrete_DescendantResolves_Ok(HttpRunner):
+    """OP#13 - abstract base with gaps + concrete descendant that closes them."""
+
+    config = Config("OP#13 - Concrete descendant resolves abstract gaps").base_url(
+        get_gts_base_url()
+    )
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.a2c.v1~",
+            {
+                "type": "object",
+                "required": ["topicRef"],
+                "properties": {
+                    "topicRef": {"type": "string"},
+                    "retention": {"type": "string", "default": "P30D"},
+                },
+            },
+            "register trait-type (topicRef required, no default)",
+        ),
+        _register(
+            "gts://gts.x.test13.h.a2c.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": "gts://gts.x.test13.t.a2c.v1~",
+                "x-gts-abstract": True,
+                "properties": {"id": {"type": "string"}},
+            },
+            "register abstract base host",
+        ),
+        _register_derived(
+            "gts://gts.x.test13.h.a2c.event.v1~x.test13._.concrete.v1~",
+            "gts://gts.x.test13.h.a2c.event.v1~",
+            {"x-gts-traits": {"topicRef": TOPIC_REF_ORDERS}},
+            "register concrete derived providing topicRef",
+        ),
+        _validate_type_schema(
+            "gts.x.test13.h.a2c.event.v1~x.test13._.concrete.v1~",
+            True,
+            "validate - concrete descendant resolves required field",
+        ),
+    ]
+
+
+class TestCaseOp13_AbstractToConcrete_DescendantDoesNotResolve_Rejected(HttpRunner):
+    """OP#13 - abstract base with gaps; concrete descendant ALSO leaves gaps. Invalid."""
+
+    config = Config("OP#13 - Concrete descendant leaves required gap").base_url(
+        get_gts_base_url()
+    )
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.a2cbad.v1~",
+            {
+                "type": "object",
+                "required": ["topicRef"],
+                "properties": {
+                    "topicRef": {"type": "string"},
+                    "retention": {"type": "string", "default": "P30D"},
+                },
+            },
+            "register trait-type (topicRef required, no default)",
+        ),
+        _register(
+            "gts://gts.x.test13.h.a2cbad.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": "gts://gts.x.test13.t.a2cbad.v1~",
+                "x-gts-abstract": True,
+                "properties": {"id": {"type": "string"}},
+            },
+            "register abstract base host",
+        ),
+        _register_derived(
+            "gts://gts.x.test13.h.a2cbad.event.v1~x.test13._.still_open.v1~",
+            "gts://gts.x.test13.h.a2cbad.event.v1~",
+            {},
+            "register concrete derived without filling topicRef",
+        ),
+        _validate_type_schema(
+            "gts.x.test13.h.a2cbad.event.v1~x.test13._.still_open.v1~",
+            False,
+            "validate should fail - non-abstract concrete host has unresolved required",
+        ),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# MAJOR version pinning of trait-types
+# ---------------------------------------------------------------------------
+
+
+class TestCaseOp13_MajorVersionPin_V1ToV2_Rejected(HttpRunner):
+    """OP#13 §9.7.6 - host pins MAJOR v1 of trait-type; descendant trying to attach v2
+    is a different family, not a valid parallel-derivation chain. Rejected.
+    """
+
+    config = Config("OP#13 - MAJOR version switch rejected").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.major.v1~",
+            _trait_event_meta("majorV1"),
+            "register trait-type v1",
+        ),
+        _register_trait_type(
+            "gts://gts.x.test13.t.major.v2~",
+            _trait_event_meta("majorV2"),
+            "register trait-type v2 (separate family)",
+        ),
+        _register(
+            "gts://gts.x.test13.h.major.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": "gts://gts.x.test13.t.major.v1~",
+                "properties": {"id": {"type": "string"}},
+            },
+            "register host attaching trait-type v1",
+        ),
+        _register_derived(
+            "gts://gts.x.test13.h.major.event.v1~x.test13._.v2_attempt.v1~",
+            "gts://gts.x.test13.h.major.event.v1~",
+            {
+                "x-gts-traits-schema": "gts://gts.x.test13.t.major.v2~",
+            },
+            "register derived host attaching v2 trait-type",
+        ),
+        _validate_type_schema(
+            "gts.x.test13.h.major.event.v1~x.test13._.v2_attempt.v1~",
+            False,
+            "validate should fail - v2 is not derived from v1",
+        ),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Validation via /validate-entity (instance-side)
+# ---------------------------------------------------------------------------
+
+
+class TestCaseOp13_TraitsValid_ValidateEntity(HttpRunner):
+    """OP#13 - validate a registered host type schema via /validate-entity."""
+
+    config = Config("OP#13 - validate-entity passes for valid host").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.vent.v1~",
+            _trait_event_meta("vent"),
+            "register trait-type",
+        ),
+        _register(
+            "gts://gts.x.test13.h.vent.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": "gts://gts.x.test13.t.vent.v1~",
+                "properties": {"id": {"type": "string"}},
+            },
+            "register base host",
+        ),
+        _register_derived(
+            "gts://gts.x.test13.h.vent.event.v1~x.test13._.complete.v1~",
+            "gts://gts.x.test13.h.vent.event.v1~",
+            {"x-gts-traits": {"topicRef": TOPIC_REF_ORDERS, "retention": "P90D"}},
+            "register complete derived host",
+        ),
+        _validate_entity(
+            "gts.x.test13.h.vent.event.v1~x.test13._.complete.v1~",
+            True,
+            "validate-entity should pass for trait-complete host schema",
+        ),
+    ]
+
+
+class TestCaseOp13_TraitsInvalid_ValidateEntity_MissingTrait(HttpRunner):
+    """OP#13 - validate-entity fails for a host schema with unresolved required trait."""
+
+    config = Config("OP#13 - validate-entity fails for incomplete host").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.ventm.v1~",
+            {
+                "type": "object",
+                "required": ["topicRef"],
+                "properties": {
+                    "topicRef": {"type": "string"},
+                },
+            },
+            "register trait-type (topicRef required, no default)",
+        ),
+        _register(
+            "gts://gts.x.test13.h.ventm.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": "gts://gts.x.test13.t.ventm.v1~",
+                "properties": {"id": {"type": "string"}},
+            },
+            "register base host (concrete, incomplete)",
+        ),
+        _validate_entity(
+            "gts.x.test13.h.ventm.event.v1~",
+            False,
+            "validate-entity should fail - unresolved required trait field",
+        ),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Edge cases — base schema without traits, instance with trait keywords, etc.
+# ---------------------------------------------------------------------------
+
+
+class TestCaseOp13_TraitsValid_BaseSchemaNoTraits(HttpRunner):
+    """OP#13 - a host-type that does NOT attach a trait-type is fine. No completeness check."""
+
+    config = Config("OP#13 - Host without trait-type OK").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            "gts://gts.x.test13.h.notraits.event.v1~",
+            {
+                "type": "object",
+                "properties": {"id": {"type": "string"}},
+            },
+            "register base host with no x-gts-traits-schema",
+        ),
+        _validate_type_schema(
+            "gts.x.test13.h.notraits.event.v1~",
+            True,
+            "validate - no traits attached, nothing to validate",
         ),
     ]
 
 
 class TestCaseOp13_TraitsInvalid_DerivedHasTraitsButNoTraitSchema(HttpRunner):
-    """OP#13 - Traits: derived provides x-gts-traits.
+    """OP#13 - derived host provides `x-gts-traits` but no trait-type is in the chain.
 
-    No x-gts-traits-schema exists.
+    This is a meaningless declaration and is rejected.
     """
-    config = Config(
-        "OP#13 - Derived Traits Without Trait Schema"
-    ).base_url(get_gts_base_url())
+
+    config = Config("OP#13 - x-gts-traits without trait-type rejected").base_url(get_gts_base_url())
 
     def test_start(self):
         super().test_start()
 
     teststeps = [
         _register(
-            "gts://gts.x.test13.nt0.event.v1~",
+            "gts://gts.x.test13.h.notrt.event.v1~",
             {
                 "type": "object",
-                "required": ["id"],
                 "properties": {"id": {"type": "string"}},
             },
-            "register base without traits-schema",
+            "register base host (no trait-type attached)",
         ),
         _register_derived(
-            (
-                "gts://gts.x.test13.nt0.event.v1~"
-                "x.test13._.derived_has_traits.v1~"
-            ),
-            "gts://gts.x.test13.nt0.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits": {"retention": "P30D"},
-            },
-            "register derived with x-gts-traits but no traits-schema",
+            "gts://gts.x.test13.h.notrt.event.v1~x.test13._.has_traits.v1~",
+            "gts://gts.x.test13.h.notrt.event.v1~",
+            {"x-gts-traits": {"random": "value"}},
+            "register derived with x-gts-traits but no trait-type in chain",
         ),
         _validate_type_schema(
-            "gts.x.test13.nt0.event.v1~x.test13._.derived_has_traits.v1~",
+            "gts.x.test13.h.notrt.event.v1~x.test13._.has_traits.v1~",
             False,
-            "validate should fail - trait values have no trait schema",
+            "validate should fail - x-gts-traits used without trait-type in chain",
         ),
     ]
 
 
-class TestCaseOp13_TraitsInvalid_BaseHasTraitsButNoTraitSchema(HttpRunner):
-    """OP#13 - Traits: base provides x-gts-traits.
+class TestCaseOp13_TraitsInvalid_TraitsSchemaNotAString(HttpRunner):
+    """OP#13 - x-gts-traits-schema is not a string. Invalid value type.
 
-    No x-gts-traits-schema exists.
+    Replaces TraitsInvalid_TraitsSchemaNotObject — value type changed in the new model.
     """
-    config = Config(
-        "OP#13 - Base Traits Without Trait Schema"
-    ).base_url(get_gts_base_url())
+
+    config = Config("OP#13 - x-gts-traits-schema must be a string").base_url(get_gts_base_url())
 
     def test_start(self):
         super().test_start()
 
     teststeps = [
-        _register(
-            "gts://gts.x.test13.nt1.event.v1~",
+        _post_schema_raw(
             {
+                "$$id": "gts://gts.x.test13.h.bad_ts.event.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
                 "type": "object",
-                "x-gts-traits": {"retention": "P30D"},
-                "required": ["id"],
+                "x-gts-traits-schema": {"type": "object"},  # old-style inline schema
                 "properties": {"id": {"type": "string"}},
             },
-            "register base with x-gts-traits but no traits-schema",
+            "register host with inline-object x-gts-traits-schema",
         ),
         _validate_type_schema(
-            "gts.x.test13.nt1.event.v1~",
+            "gts.x.test13.h.bad_ts.event.v1~",
             False,
-            "validate should fail - x-gts-traits without x-gts-traits-schema",
+            "validate should fail - x-gts-traits-schema is not a string URN",
         ),
     ]
 
 
-class TestCaseOp13_TraitsInvalid_ConstNarrowingViolationInLeaf(HttpRunner):
-    """OP#13 - Traits: mid-level narrows retention to const.
+class TestCaseOp13_TraitsInvalid_TraitsSchemaNotValidUrn(HttpRunner):
+    """OP#13 - x-gts-traits-schema string is not a valid GTS Type URN."""
 
-    Leaf tries different value.
-    """
-    config = Config(
-        "OP#13 - Const Narrowing Violation"
-    ).base_url(get_gts_base_url())
+    config = Config("OP#13 - x-gts-traits-schema invalid URN").base_url(get_gts_base_url())
 
     def test_start(self):
         super().test_start()
 
     teststeps = [
-        _register(
-            "gts://gts.x.test13.const.event.v1~",
+        _post_schema_raw(
             {
+                "$$id": "gts://gts.x.test13.h.bad_urn.event.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
                 "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {"retention": {"type": "string"}},
-                },
-                "required": ["id"],
+                "x-gts-traits-schema": "not-a-gts-urn",
                 "properties": {"id": {"type": "string"}},
             },
-            "register base with retention trait",
-        ),
-        _register_derived(
-            "gts://gts.x.test13.const.event.v1~x.test13._.mid_const.v1~",
-            "gts://gts.x.test13.const.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "properties": {"retention": {"const": "P30D"}},
-                },
-                "x-gts-traits": {"retention": "P30D"},
-            },
-            "register mid-level narrowing retention to const P30D",
+            "register host with malformed trait-type URN",
         ),
         _validate_type_schema(
-            "gts.x.test13.const.event.v1~x.test13._.mid_const.v1~",
-            True,
-            "validate mid-level - const narrowing",
-        ),
-        _register_derived(
-            (
-                "gts://gts.x.test13.const.event.v1~"
-                "x.test13._.mid_const.v1~"
-                "x.test13._.leaf_bad_const.v1~"
-            ),
-            "gts://gts.x.test13.const.event.v1~x.test13._.mid_const.v1~",
-            {
-                "type": "object",
-                "x-gts-traits": {"retention": "P90D"},
-            },
-            "register leaf overriding retention to P90D",
-        ),
-        _validate_type_schema(
-            (
-                "gts.x.test13.const.event.v1~"
-                "x.test13._.mid_const.v1~"
-                "x.test13._.leaf_bad_const.v1~"
-            ),
+            "gts.x.test13.h.bad_urn.event.v1~",
             False,
-            "validate should fail - leaf violates const retention=P30D",
-        ),
-    ]
-
-
-class TestCaseOp13_TraitsValid_ConstNarrowingLeafMatches(HttpRunner):
-    """OP#13 - Traits: mid-level narrows retention to const.
-
-    Leaf provides same value.
-    """
-    config = Config(
-        "OP#13 - Const Narrowing Leaf Match"
-    ).base_url(get_gts_base_url())
-
-    def test_start(self):
-        super().test_start()
-
-    teststeps = [
-        _register(
-            "gts://gts.x.test13.constm.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {"retention": {"type": "string"}},
-                },
-                "required": ["id"],
-                "properties": {"id": {"type": "string"}},
-            },
-            "register base with retention trait",
-        ),
-        _register_derived(
-            "gts://gts.x.test13.constm.event.v1~x.test13._.mid_constm.v1~",
-            "gts://gts.x.test13.constm.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "properties": {"retention": {"const": "P30D"}},
-                },
-                "x-gts-traits": {"retention": "P30D"},
-            },
-            "register mid-level narrowing retention to const P30D",
-        ),
-        _validate_type_schema(
-            "gts.x.test13.constm.event.v1~x.test13._.mid_constm.v1~",
-            True,
-            "validate mid-level - const narrowing",
-        ),
-        _register_derived(
-            (
-                "gts://gts.x.test13.constm.event.v1~"
-                "x.test13._.mid_constm.v1~"
-                "x.test13._.leaf_ok_constm.v1~"
-            ),
-            "gts://gts.x.test13.constm.event.v1~x.test13._.mid_constm.v1~",
-            {
-                "type": "object",
-                "x-gts-traits": {"retention": "P30D"},
-            },
-            "register leaf with retention matching const P30D",
-        ),
-        _validate_type_schema(
-            (
-                "gts.x.test13.constm.event.v1~"
-                "x.test13._.mid_constm.v1~"
-                "x.test13._.leaf_ok_constm.v1~"
-            ),
-            True,
-            "validate leaf - retention matches const",
-        ),
-    ]
-
-
-class TestCaseOp13_TraitsInvalid_CyclingRef_SelfRef(HttpRunner):
-    """OP#13 - Traits: x-gts-traits-schema refs itself."""
-    config = Config(
-        "OP#13 - Traits Self-Referencing Ref"
-    ).base_url(get_gts_base_url())
-
-    def test_start(self):
-        super().test_start()
-
-    teststeps = [
-        _register(
-            "gts://gts.x.test13.cyc.selfref.v1~",
-            {
-                "type": "object",
-                "properties": {
-                    "retention": {
-                        "type": "string",
-                    },
-                },
-            },
-            "register standalone trait schema",
-        ),
-        _register(
-            "gts://gts.x.test13.cyc.selfevt.v1~",
-            {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "allOf": [
-                        {
-                            "$$ref": (
-                                "gts://gts.x.test13"
-                                ".cyc.selfref.v1~"
-                            ),
-                        },
-                        {
-                            "$$ref": (
-                                "gts://gts.x.test13"
-                                ".cyc.selfref.v1~"
-                            ),
-                        },
-                    ],
-                },
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
-            },
-            "register base with self-cycling trait ref",
-        ),
-        _register_derived(
-            (
-                "gts://gts.x.test13.cyc.selfevt.v1~"
-                "x.test13._.cyc_self_leaf.v1~"
-            ),
-            "gts://gts.x.test13.cyc.selfevt.v1~",
-            {
-                "type": "object",
-                "x-gts-traits": {
-                    "retention": "P30D",
-                },
-            },
-            "register derived with traits",
-        ),
-        _validate_type_schema(
-            (
-                "gts.x.test13.cyc.selfevt.v1~"
-                "x.test13._.cyc_self_leaf.v1~"
-            ),
-            False,
-            "validate should fail - cycling ref in traits-schema",
-        ),
-    ]
-
-
-class TestCaseOp13_TraitsInvalid_CyclingRef_TwoNode(HttpRunner):
-    """OP#13 - Traits: trait schema A refs B, B refs A."""
-    config = Config(
-        "OP#13 - Traits Two-Node Ref Cycle"
-    ).base_url(get_gts_base_url())
-
-    def test_start(self):
-        super().test_start()
-
-    teststeps = [
-        _register(
-            "gts://gts.x.test13.cyc2.trait_a.v1~",
-            {
-                "type": "object",
-                "allOf": [
-                    {
-                        "$$ref": (
-                            "gts://gts.x.test13"
-                            ".cyc2.trait_b.v1~"
-                        ),
-                    },
-                ],
-                "properties": {
-                    "retention": {"type": "string"},
-                },
-            },
-            "register trait schema A referencing B",
-        ),
-        _register(
-            "gts://gts.x.test13.cyc2.trait_b.v1~",
-            {
-                "type": "object",
-                "allOf": [
-                    {
-                        "$$ref": (
-                            "gts://gts.x.test13"
-                            ".cyc2.trait_a.v1~"
-                        ),
-                    },
-                ],
-                "properties": {
-                    "topicRef": {
-                        "type": "string",
-                        "x-gts-ref": (
-                            "gts.x.core.events.topic.v1~"
-                        ),
-                    },
-                },
-            },
-            "register trait schema B referencing A",
-        ),
-        _register(
-            "gts://gts.x.test13.cyc2.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "allOf": [
-                        {
-                            "$$ref": (
-                                "gts://gts.x.test13"
-                                ".cyc2.trait_a.v1~"
-                            ),
-                        },
-                    ],
-                },
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
-            },
-            "register base with cycling trait refs",
-        ),
-        _register_derived(
-            (
-                "gts://gts.x.test13.cyc2.event.v1~"
-                "x.test13._.cyc2_leaf.v1~"
-            ),
-            "gts://gts.x.test13.cyc2.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits": {
-                    "retention": "P30D",
-                    "topicRef": (
-                        "gts.x.core.events.topic.v1~"
-                        "x.test13._.orders.v1"
-                    ),
-                },
-            },
-            "register derived with traits",
-        ),
-        _validate_type_schema(
-            (
-                "gts.x.test13.cyc2.event.v1~"
-                "x.test13._.cyc2_leaf.v1~"
-            ),
-            False,
-            "validate should fail - two-node cycle in trait refs",
-        ),
-    ]
-
-class TestCaseOp13_TraitsInvalid_TraitsSchemaNotObject(HttpRunner):
-    """OP#13 - Traits: x-gts-traits-schema with type=integer.
-
-    Must fail - trait schema must have type=object.
-    """
-    config = Config(
-        "OP#13 - Traits Schema Not Object"
-    ).base_url(get_gts_base_url())
-
-    def test_start(self):
-        super().test_start()
-
-    teststeps = [
-        _register(
-            "gts://gts.x.test13.tsnobj.event.v1~",
-            {
-                "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "integer",
-                },
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
-            },
-            "register base with type=integer trait schema",
-        ),
-        _register_derived(
-            (
-                "gts://gts.x.test13.tsnobj.event.v1~"
-                "x.test13._.tsnobj_leaf.v1~"
-            ),
-            "gts://gts.x.test13.tsnobj.event.v1~",
-            {
-                "type": "object",
-            },
-            "register derived",
-        ),
-        _validate_type_schema(
-            (
-                "gts.x.test13.tsnobj.event.v1~"
-                "x.test13._.tsnobj_leaf.v1~"
-            ),
-            False,
-            "validate should fail - trait schema type is integer",
+            "validate should fail - URN is not a valid GTS Type identifier",
         ),
     ]
 
 
 class TestCaseOp13_TraitsInvalid_TraitsInInstance(HttpRunner):
-    """OP#13 - Traits: x-gts-traits in an instance document.
+    """OP#13 - x-gts-traits / x-gts-traits-schema MUST NOT appear in instance documents."""
 
-    Trait keywords are schema-only. Instance with x-gts-traits
-    must fail entity validation.
-    """
-    config = Config(
-        "OP#13 - Traits In Instance"
-    ).base_url(get_gts_base_url())
+    config = Config("OP#13 - Trait keywords in instance rejected").base_url(get_gts_base_url())
 
     def test_start(self):
         super().test_start()
 
     teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.inst.v1~",
+            _trait_event_meta("inst"),
+            "register trait-type",
+        ),
         _register(
-            "gts://gts.x.test13.tinst.event.v1~",
+            "gts://gts.x.test13.h.inst.event.v1~",
             {
                 "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "properties": {
-                        "retention": {
-                            "type": "string",
-                            "default": "P30D",
-                        },
-                    },
-                },
-                "required": ["id"],
+                "x-gts-traits-schema": "gts://gts.x.test13.t.inst.v1~",
                 "properties": {
                     "id": {"type": "string"},
                 },
             },
-            "register base schema with traits",
+            "register host",
         ),
-        _register_derived(
-            (
-                "gts://gts.x.test13.tinst.event.v1~"
-                "x.test13._.tinst_leaf.v1~"
-            ),
-            "gts://gts.x.test13.tinst.event.v1~",
+        _post_schema_raw(
             {
-                "type": "object",
-                "x-gts-traits": {
-                    "retention": "P90D",
-                },
+                "id": "gts.x.test13.h.inst.event.v1~x.test13._.bad_inst.v1",
+                "x-gts-traits": {"topicRef": TOPIC_REF_ORDERS},
             },
-            "register derived with traits",
+            "register an instance with x-gts-traits leaked into it",
+        ),
+        _validate_entity(
+            "gts.x.test13.h.inst.event.v1~x.test13._.bad_inst.v1",
+            False,
+            "validate should fail - x-gts-traits in instance is illegal",
+        ),
+    ]
+
+
+class TestCaseOp13_TraitsInvalid_BaseHasTraitsButNoTraitSchema(HttpRunner):
+    """OP#13 - a base host declares x-gts-traits without declaring x-gts-traits-schema."""
+
+    config = Config("OP#13 - Base x-gts-traits without trait-type rejected").base_url(
+        get_gts_base_url()
+    )
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _post_schema_raw(
+            {
+                "$$id": "gts://gts.x.test13.h.lone_traits.event.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "x-gts-traits": {"random": "value"},
+                "properties": {"id": {"type": "string"}},
+            },
+            "register base host with x-gts-traits but no x-gts-traits-schema",
         ),
         _validate_type_schema(
-            (
-                "gts.x.test13.tinst.event.v1~"
-                "x.test13._.tinst_leaf.v1~"
-            ),
-            True,
-            "validate derived schema - ok",
-        ),
-        _validate_entity(
-            (
-                "gts.x.test13.tinst.event.v1~"
-                "x.test13._.tinst_leaf.v1~"
-            ),
+            "gts.x.test13.h.lone_traits.event.v1~",
             False,
-            "validate entity should fail - traits in instance",
+            "validate should fail - x-gts-traits requires a trait-type in chain",
         ),
     ]
 
 
-class TestCaseOp13_TraitsInvalid_TraitsSchemaInInstance(HttpRunner):
-    """OP#13 - Traits: x-gts-traits-schema in an instance document.
+# ---------------------------------------------------------------------------
+# `const` narrowing in trait values (carried over)
+# ---------------------------------------------------------------------------
 
-    Trait keywords are schema-only. Instance with
-    x-gts-traits-schema must fail entity validation.
-    """
-    config = Config(
-        "OP#13 - Traits Schema In Instance"
-    ).base_url(get_gts_base_url())
+
+class TestCaseOp13_ConstNarrowing_LeafMatches_Ok(HttpRunner):
+    """OP#13 - mid sets const via derived trait-type; leaf provides that exact value. OK."""
+
+    config = Config("OP#13 - const narrowing leaf matches").base_url(get_gts_base_url())
 
     def test_start(self):
         super().test_start()
 
     teststeps = [
-        _register(
-            "gts://gts.x.test13.tsinst.event.v1~",
+        _register_trait_type(
+            "gts://gts.x.test13.t.const.base.v1~",
             {
                 "type": "object",
-                "x-gts-traits-schema": {
-                    "type": "object",
-                    "properties": {
-                        "retention": {
-                            "type": "string",
-                            "default": "P30D",
-                        },
-                    },
-                },
-                "required": ["id"],
                 "properties": {
-                    "id": {"type": "string"},
+                    "channel": {"type": "string"},
                 },
             },
-            "register base schema with traits-schema",
+            "register base trait-type",
         ),
-        _validate_entity(
-            "gts.x.test13.tsinst.event.v1~",
-            False,
-            "validate entity should fail - traits-schema in instance",
+        _post_schema_raw(
+            {
+                "$$id": "gts://gts.x.test13.t.const.base.v1~x.test13._.audit_only.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [{"$$ref": "gts://gts.x.test13.t.const.base.v1~"}],
+                "properties": {
+                    "channel": {"type": "string", "const": "audit"},
+                },
+            },
+            "register derived trait-type narrowing channel to const 'audit'",
+        ),
+        _register(
+            "gts://gts.x.test13.h.const.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": "gts://gts.x.test13.t.const.base.v1~x.test13._.audit_only.v1~",
+                "properties": {"id": {"type": "string"}},
+            },
+            "register host attaching the narrowed trait-type",
+        ),
+        _register_derived(
+            "gts://gts.x.test13.h.const.event.v1~x.test13._.match.v1~",
+            "gts://gts.x.test13.h.const.event.v1~",
+            {"x-gts-traits": {"channel": "audit"}},
+            "register derived providing matching const value",
+        ),
+        _validate_type_schema(
+            "gts.x.test13.h.const.event.v1~x.test13._.match.v1~",
+            True,
+            "validate - leaf value matches const constraint",
         ),
     ]
+
+
+class TestCaseOp13_ConstNarrowing_LeafViolation_Rejected(HttpRunner):
+    """OP#13 - mid declares const via derived trait-type; leaf supplies a different value."""
+
+    config = Config("OP#13 - const narrowing leaf violation").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.constv.base.v1~",
+            {
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string"},
+                },
+            },
+            "register base trait-type",
+        ),
+        _post_schema_raw(
+            {
+                "$$id": "gts://gts.x.test13.t.constv.base.v1~x.test13._.audit_only.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [{"$$ref": "gts://gts.x.test13.t.constv.base.v1~"}],
+                "properties": {
+                    "channel": {"type": "string", "const": "audit"},
+                },
+            },
+            "register derived trait-type narrowing channel to const 'audit'",
+        ),
+        _register(
+            "gts://gts.x.test13.h.constv.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": "gts://gts.x.test13.t.constv.base.v1~x.test13._.audit_only.v1~",
+                "properties": {"id": {"type": "string"}},
+            },
+            "register host",
+        ),
+        _register_derived(
+            "gts://gts.x.test13.h.constv.event.v1~x.test13._.mismatch.v1~",
+            "gts://gts.x.test13.h.constv.event.v1~",
+            {"x-gts-traits": {"channel": "notification"}},
+            "register derived with channel value not matching const",
+        ),
+        _validate_type_schema(
+            "gts.x.test13.h.constv.event.v1~x.test13._.mismatch.v1~",
+            False,
+            "validate should fail - leaf value violates const",
+        ),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Cycle detection (trait-type cycles via x-gts-traits-schema recursion)
+# ---------------------------------------------------------------------------
+
+
+class TestCaseOp13_CycleDetection_SelfRef_Rejected(HttpRunner):
+    """OP#13 - a trait-type attaches itself as its own trait-type (self-cycle).
+
+    The spec permits recursion in principle, but registries MUST detect cycles
+    of finite depth that would otherwise loop forever during effective-type
+    resolution.
+    """
+
+    config = Config("OP#13 - self-referential trait-type rejected").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _post_schema_raw(
+            {
+                "$$id": "gts://gts.x.test13.t.selfref.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "x-gts-traits-schema": "gts://gts.x.test13.t.selfref.v1~",
+                "properties": {
+                    "anything": {"type": "string"},
+                },
+            },
+            "register a trait-type that references itself",
+        ),
+        _validate_type_schema(
+            "gts.x.test13.t.selfref.v1~",
+            False,
+            "validate should fail - self-cycle detected",
+        ),
+    ]
+
+
+class TestCaseOp13_CycleDetection_TwoNodeCycle_Rejected(HttpRunner):
+    """OP#13 - trait-type A attaches B as its trait-type; B attaches A. Cycle."""
+
+    config = Config("OP#13 - two-node trait-type cycle rejected").base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        # In a registry with single-pass registration, A would have to forward-ref B.
+        # Some implementations require both to exist; we register A first as a bare type,
+        # then register B attaching A, then update A to attach B.
+        # For an interop-friendly test, we use _post_schema_raw to upsert both as cycle.
+        _post_schema_raw(
+            {
+                "$$id": "gts://gts.x.test13.t.cycleA.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "x-gts-traits-schema": "gts://gts.x.test13.t.cycleB.v1~",
+                "properties": {"a": {"type": "string"}},
+            },
+            "register A pointing at B (forward-ref)",
+        ),
+        _post_schema_raw(
+            {
+                "$$id": "gts://gts.x.test13.t.cycleB.v1~",
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "x-gts-traits-schema": "gts://gts.x.test13.t.cycleA.v1~",
+                "properties": {"b": {"type": "string"}},
+            },
+            "register B pointing at A (closes the cycle)",
+        ),
+        _validate_type_schema(
+            "gts.x.test13.t.cycleA.v1~",
+            False,
+            "validate should fail - 2-node trait-type cycle",
+        ),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Instance validation (defense-in-depth for OP#6)
+# ---------------------------------------------------------------------------
+
+
+class TestCaseOp13_InstanceValidation_TypeWithUnresolvedTraits_Rejected(HttpRunner):
+    """OP#13 / OP#6 - validate-entity on an instance whose type is trait-incomplete.
+
+    Even if a registry somehow accepted such a type, OP#6 MUST reject instance
+    validation as defense-in-depth.
+    """
+
+    config = Config("OP#13 - instance of trait-incomplete type rejected").base_url(
+        get_gts_base_url()
+    )
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_trait_type(
+            "gts://gts.x.test13.t.inccpl.v1~",
+            {
+                "type": "object",
+                "required": ["topicRef"],
+                "properties": {
+                    "topicRef": {"type": "string"},
+                },
+            },
+            "register trait-type (topicRef required, no default)",
+        ),
+        _register(
+            "gts://gts.x.test13.h.inccpl.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": "gts://gts.x.test13.t.inccpl.v1~",
+                "properties": {"id": {"type": "string"}},
+            },
+            "register concrete host without resolving topicRef",
+        ),
+        _validate_entity(
+            "gts.x.test13.h.inccpl.event.v1~",
+            False,
+            "validate-entity should fail - host type is trait-incomplete",
+        ),
+    ]
+
+
+if __name__ == "__main__":
+    TestCaseOp13_TraitsValid_AllResolved().test_start()
