@@ -1335,7 +1335,7 @@ Implementation notes:
 
 ### 9.7 - GTS Type Schema Traits (`x-gts-traits-schema` / `x-gts-traits`)
 
-**OP#13 - Schema Traits Validation**: Validate that `x-gts-traits` values in derived schemas conform to the `x-gts-traits-schema` defined in their base schemas. Verify that all trait properties are resolved (via direct value or `default`) and that trait values satisfy the trait schema constraints. Trait values set by an ancestor are immutable — descendants MUST NOT override them with a different value. Both `x-gts-traits-schema` and `x-gts-traits` are schema-only keywords and MUST NOT appear in instances. `x-gts-traits-schema` MUST have `"type": "object"`. Uses the same validation endpoints (`/validate-type-schema`, `/validate-entity`).
+**OP#13 - Schema Traits Validation**: Validate that `x-gts-traits` values in derived schemas conform to the `x-gts-traits-schema` defined in their base schemas. Verify that all trait properties are resolved (via direct value or `default`) and that trait values satisfy the trait schema constraints. Trait values set by an ancestor are immutable — descendants MUST NOT override them with a different value. Both `x-gts-traits-schema` and `x-gts-traits` are schema-only keywords and MUST NOT appear in instances. `x-gts-traits-schema` MUST be a valid JSON Schema subschema (object, `true`, or `false`). Uses the same validation endpoints (`/validate-type-schema`, `/validate-entity`).
 
 A **schema trait** is a semantic annotation attached to a GTS Type Schema that describes **system behaviour** for processing instances of that type. Traits are not part of the object data model — they do not define instance properties. Instead, they configure cross-cutting concerns such as:
 
@@ -1349,20 +1349,31 @@ Two JSON Schema annotation keywords are used together:
 
 | Keyword | JSON type | Purpose | Typical location |
 |---------|-----------|---------|------------------|
-| **`x-gts-traits-schema`** | JSON Schema (object) | Defines the **shape** of the trait — property names, types, constraints, and `default` values | Base / ancestor schemas |
+| **`x-gts-traits-schema`** | JSON Schema (object \| boolean) | Defines the **shape** of the trait — property names, types, constraints, and `default` values | Base / ancestor schemas |
 | **`x-gts-traits`** | Plain JSON object | Provides concrete **values** for the trait properties | Derived (leaf) schemas; may also appear alongside `x-gts-traits-schema` in the same schema |
 
 **Schema-only keywords:** Both `x-gts-traits-schema` and `x-gts-traits` are **schema annotation keywords** and MUST only appear in JSON Schema documents (documents with `$schema`). They MUST NOT appear in instance documents. Implementations MUST reject instances that contain these keywords.
 
 A single schema MAY contain both keywords. This is explicitly allowed and useful when a mid-level schema defines new trait properties (`x-gts-traits-schema`) while also resolving traits inherited from its parent (`x-gts-traits`).
 
-**`x-gts-traits-schema`** MUST be a valid JSON Schema with `"type": "object"` at its top level. Implementations MUST reject trait schemas that declare a different type (e.g., `"type": "integer"`). It MAY be:
+**`x-gts-traits-schema`** is a JSON Schema [subschema](https://json-schema.org/learn/glossary#subschema). By the JSON Schema definition, its value MAY therefore be:
 
-- An **inline** schema object
-- A **`$ref`** to a standalone, reusable trait schema
-- A **composition** using `allOf`, `oneOf`, `anyOf`, etc.
+- an **object subschema** — declares the trait shape in the usual way (`properties`, `required`, etc.);
+- **`true`** — admits any trait values (the trivially-satisfied schema; traits remain permitted but unconstrained at this layer);
+- **`false`** — prohibits traits entirely on this host, and on any descendant whose chain includes this layer (`false` is unsatisfiable, so the chain-aggregated effective trait-schema becomes unsatisfiable and `x-gts-traits` is rejected).
 
-Standard JSON Schema `$ref` resolution rules apply — implementations MUST NOT invent a custom reference mechanism.
+When `x-gts-traits-schema` is an object subschema, the **effective** trait-schema (after chain aggregation per §9.7.5) MUST constrain trait values to JSON objects.
+
+Because `x-gts-traits-schema` is an ordinary JSON Schema subschema, standard JSON Schema applies inside it without GTS reinventing anything:
+
+- `$ref` resolves per ordinary JSON Schema `$ref` rules (base URI resolution + JSON Pointer fragments). Implementations MUST NOT invent a custom reference mechanism.
+- `allOf` / `oneOf` / `anyOf` / `not` carry their normal JSON Schema composition semantics — `allOf` is a logical AND over its subschemas at validation time, as for any other JSON Schema use.
+- `properties` / `required` / `additionalProperties` / numeric and string constraints / `const` / `enum` / etc. behave as in any other JSON Schema.
+- The trait shape MAY be declared **inline**, **referenced** from a standalone trait-schema registered as an ordinary GTS Type via `$ref`, or **composed** via `allOf` of inline parts and references. The choice is an authoring decision — inline keeps the trait surface private to the host and inheriting the host's ACL; the `$ref`-to-registered-type form is appropriate when the trait surface should be a separately governed artifact.
+
+**Inheritance along the host-type derivation chain happens at the registry level, not at the author level.** A descendant host type does NOT need to repeat the ancestor's `x-gts-traits-schema` inside its own — the registry composes all `x-gts-traits-schema` declarations encountered along the host's `$id` chain via JSON Schema `allOf` (see §9.7.5). A descendant MAY write an explicit `allOf` that includes a `$ref` to an ancestor's `x-gts-traits-schema`; doing so is redundant under chain aggregation but not invalid (consistent with the JSON Schema extension framing — see [`adr/0001-derivation-form.md`](adr/0001-derivation-form.md)).
+
+See [`adr/0002-x-gts-traits-schema.md`](adr/0002-x-gts-traits-schema.md) for the rationale behind the subschema framing and the chain-aggregation rule.
 
 **`x-gts-traits`** is a plain JSON object of concrete values. Constraint keywords like `const` belong in `x-gts-traits-schema` (the trait schema), not in `x-gts-traits` (the trait values).
 
