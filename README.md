@@ -1335,7 +1335,7 @@ Implementation notes:
 
 ### 9.7 - GTS Type Schema Traits (`x-gts-traits-schema` / `x-gts-traits`)
 
-**OP#13 - Schema Traits Validation**: Validate that `x-gts-traits` values in derived schemas conform to the `x-gts-traits-schema` defined in their base schemas. Verify that, for non-abstract types, all required trait properties in the effective trait-schema are resolved (via explicit value in the chain-merged `x-gts-traits` or via `default` in the effective trait-schema), and that trait values satisfy the effective trait-schema's other constraints. Trait values set by an ancestor are immutable — descendants MUST NOT override them with a different value. Both `x-gts-traits-schema` and `x-gts-traits` are schema-only keywords and MUST NOT appear in instances. `x-gts-traits-schema` MUST be a valid JSON Schema subschema (object, `true`, or `false`). Uses the same validation endpoints (`/validate-type-schema`, `/validate-entity`).
+**OP#13 - Schema Traits Validation**: Validate that `x-gts-traits` values in derived schemas conform to the `x-gts-traits-schema` defined in their base schemas. Verify that, for non-abstract types, all required trait properties in the effective trait-schema are resolved (via explicit value in the chain-merged `x-gts-traits` or via `default` in the effective trait-schema), and that the chain-merged trait values satisfy the effective trait-schema's other constraints (including `const`, which a publisher uses to lock individual trait values across descendants — see §9.7.5). Both `x-gts-traits-schema` and `x-gts-traits` are schema-only keywords and MUST NOT appear in instances. `x-gts-traits-schema` MUST be a valid JSON Schema [subschema](https://json-schema.org/learn/glossary#subschema) (object, `true`, or `false`). Uses the same validation endpoints (`/validate-type-schema`, `/validate-entity`).
 
 A **schema trait** is a semantic annotation attached to a GTS Type Schema that describes **system behaviour** for processing instances of that type. Traits are not part of the object data model — they do not define instance properties. Instead, they configure cross-cutting concerns such as:
 
@@ -1364,12 +1364,9 @@ A single schema MAY contain both keywords. This is explicitly allowed and useful
 
 When `x-gts-traits-schema` is an object subschema, the **effective** trait-schema (after chain aggregation per §9.7.5) MUST constrain trait values to JSON objects.
 
-Because `x-gts-traits-schema` is an ordinary JSON Schema subschema, standard JSON Schema applies inside it without GTS reinventing anything:
+Because `x-gts-traits-schema` is an ordinary JSON Schema subschema, all standard JSON Schema constructs apply inside it with their normal semantics; implementations MUST NOT invent a custom reference mechanism for `$ref`.
 
-- `$ref` resolves per ordinary JSON Schema `$ref` rules (base URI resolution + JSON Pointer fragments). Implementations MUST NOT invent a custom reference mechanism.
-- `allOf` / `oneOf` / `anyOf` / `not` carry their normal JSON Schema composition semantics — `allOf` is a logical AND over its subschemas at validation time, as for any other JSON Schema use.
-- `properties` / `required` / `additionalProperties` / numeric and string constraints / `const` / `enum` / etc. behave as in any other JSON Schema.
-- The trait shape MAY be declared **inline**, **referenced** from a standalone trait-schema registered as an ordinary GTS Type via `$ref`, or **composed** via `allOf` of inline parts and references. The choice is an authoring decision — inline keeps the trait surface private to the host and inheriting the host's ACL; the `$ref`-to-registered-type form is appropriate when the trait surface should be a separately governed artifact.
+The trait shape MAY be declared **inline**, **referenced** from a standalone trait-schema registered as an ordinary GTS Type via `$ref`, or **composed** via `allOf` of inline parts and references. The choice is an authoring decision — inline keeps the trait surface private to the host and inheriting the host's ACL; the `$ref`-to-registered-type form is appropriate when the trait surface should be a separately governed artifact.
 
 **Inheritance along the host-type derivation chain happens at the registry level, not at the author level.** A descendant host type does NOT need to repeat the ancestor's `x-gts-traits-schema` inside its own — the registry composes all `x-gts-traits-schema` declarations encountered along the host's `$id` chain via JSON Schema `allOf` (see §9.7.5). A descendant MAY write an explicit `allOf` that includes a `$ref` to an ancestor's `x-gts-traits-schema`; doing so is redundant under chain aggregation but not invalid (consistent with the JSON Schema extension framing — see [`adr/0001-derivation-form.md`](adr/0001-derivation-form.md)).
 
@@ -1379,7 +1376,9 @@ See [`adr/0002-x-gts-traits-schema.md`](adr/0002-x-gts-traits-schema.md) for the
 
 #### 9.7.2 Trait schema definition (`x-gts-traits-schema`)
 
-A base schema declares the trait schema — the shape and defaults of all trait fields. This tells the system which traits exist and what values are acceptable.
+A type schema declares the trait shape — property names, types, constraints, and `default` values. Any type in the `$id` chain (base or descendant) MAY contribute its own `x-gts-traits-schema`; the registry composes all such declarations along the chain via JSON Schema `allOf` into a single effective trait-schema (see §9.7.5).
+
+The same derivation compatibility principle that governs host body schemas (§3.1) applies to `x-gts-traits-schema`: every value valid against the descendant's effective trait-schema MUST also be valid against each ancestor's trait-schema. This is enforced naturally by the `allOf` composition — contradictions across the chain (e.g., conflicting types, narrowed constraints that don't overlap, or different `default`s for the same property) produce an unsatisfiable effective trait-schema and fail registration. Typically a base declares the initial trait shape and descendants **narrow** existing trait properties (tighten constraints, `const`, narrower enums). Descendants MAY also **extend** the trait surface by introducing new top-level properties — but only if no ancestor's `x-gts-traits-schema` declares `additionalProperties: false` (or another restriction that would reject the new property); otherwise the new property is treated as "additional" against that ancestor's branch in the `allOf` composition and validation fails, by the same mechanic as §3.1 governs for host bodies.
 
 **Inline definition:**
 
@@ -1390,7 +1389,6 @@ A base schema declares the trait schema — the shape and defaults of all trait 
   "type": "object",
   "x-gts-traits-schema": {
     "type": "object",
-    "additionalProperties": false,
     "properties": {
       "topicRef": {
         "description": "GTS ID of the topic/stream where events of this type are published.",
@@ -1506,23 +1504,27 @@ Given an inheritance chain `S₀ → S₁ → … → Sₙ`:
   - **Immutable defaults:** `default` values declared in an ancestor's `x-gts-traits-schema` MUST NOT be changed by a descendant's `x-gts-traits-schema`. If a descendant redeclares a trait property with a different `default`, schema validation MUST fail.
 
 - **Trait value merge**
-  - The registry MUST build an *effective traits object* by collecting all `x-gts-traits` objects encountered in the chain (left-to-right).
-  - **Immutable-once-set:** Once a trait key is assigned a concrete value by a schema in the chain, **no descendant may override it**. If a descendant's `x-gts-traits` provides a different value for a key already set by an ancestor, schema validation MUST fail. Providing the **same** value is permitted (idempotent).
-  - Defaults declared in the effective trait schema SHOULD be used as normal JSON Schema defaults to produce a complete effective traits object.
+  - The registry MUST build an *effective traits object* by walking the type's `$id` chain root → leaf and applying each layer's `x-gts-traits` as a [JSON Merge Patch (RFC 7396)](https://datatracker.ietf.org/doc/html/rfc7396) against the chain-merged object so far. Top-level scalar / array / `null` leaves are overwritten by the descendant (last-wins). Object-valued top-level traits merge **recursively** — fields of an ancestor's object trait that the descendant does not restate are preserved.
+  - **Arrays replace wholesale** at any depth (per RFC 7396). Authors who need item-level composability SHOULD model the data as a keyed object instead of an array.
+  - **`null` at any depth deletes that key** from the effective object (per RFC 7396). The principal use case is to revert an ancestor-set value and let the trait-schema's `default` re-apply via the materialization step described in the Completeness check below — that is, a descendant writes `"<key>": null` to "fall back to the schema default" without picking a specific value. If the deleted key is `required` and has no `default`, the completeness check fails registration for non-abstract types (the descendant must then either mark itself abstract or accept that "delete + required + no default" is an unresolvable contract). Authors who want `null` as an *intended* trait value cannot express it via this merge and must use a sentinel value documented as part of the trait shape.
+  - Defaults declared in the effective trait-schema MUST be materialized into the effective traits object before the Completeness check runs (per ADR-0003): for every property declared in the effective trait-schema with a `default` and not present in the chain-merged object, the registry MUST substitute the default value. The Completeness check below (OP#13) operates on the resulting *materialized* effective traits object.
+  - A publisher who wants a trait value to be **locked** across all descendants of a base type SHOULD declare `"const": <value>` for that property in `x-gts-traits-schema`. A descendant attempting to override the value will fail the standard JSON Schema validation that runs against the effective trait-schema (per the Completeness check below). No GTS-specific "immutability" rule is required — `const` is the mechanism.
+  - A descendant MAY redeclare a trait value with the same value the ancestor already declared (idempotent restatement).
+  - See [`adr/0004-x-gts-traits-merge-strategy.md`](adr/0004-x-gts-traits-merge-strategy.md) for the rationale.
 
 - **Validation**
   - **Completeness check** (registration-time): For types whose `x-gts-abstract` is not `true`, the registry MUST verify that the *materialized* effective traits object validates against the effective trait-schema using standard JSON Schema validation. "Materialized" means: defaults declared in the effective trait-schema for properties not present in the chain-merged effective traits object are substituted in before validation. If validation fails — in particular, if a `required` property of the effective trait-schema has no chain-assigned value and no default — registration MUST fail. For types with `x-gts-abstract: true`, this completeness check is skipped; descendants are expected to close any unresolved required traits. See [`adr/0003-x-gts-traits-completeness.md`](adr/0003-x-gts-traits-completeness.md) for the rationale.
   - If the effective trait schema cannot be satisfied (e.g., contradictory constraints introduced across the chain), schema validation MUST fail.
-  - If a descendant attempts to override a trait value already set by an ancestor with a different value, schema validation MUST fail.
 
-**Example — immutable trait override (failure):**
+**Example — descendant override and `const` lock:**
 
 Consider a 3-level chain: `base → audit_event → most_derived_event`.
 
-- `audit_event` sets `x-gts-traits.topicRef` to `gts.x.core.events.topic.v1~x.core._.audit.v1`
-- `most_derived_event` attempts to set `x-gts-traits.topicRef` to `gts.x.core.events.topic.v1~x.core._.notification.v1`
+- `base.x-gts-traits-schema.properties.indexed.const = true` — the publisher locks `indexed`.
+- `audit_event.x-gts-traits` sets `topicRef = gts.x.core.events.topic.v1~x.core._.audit.v1`.
+- `most_derived_event.x-gts-traits` sets `topicRef = gts.x.core.events.topic.v1~x.core._.notification.v1`.
 
-Validation of `most_derived_event` MUST fail because `topicRef` was already set by `audit_event` and the new value differs.
+Effective traits for `most_derived_event`: `{ "indexed": <chain-derived true>, "topicRef": ".../notification.v1" }`. The override of `topicRef` is permitted (last-wins). If `most_derived_event` also tried to set `"indexed": false`, registration would fail — not because of a GTS-specific immutability rule, but because the materialized effective traits object would not satisfy the `const: true` constraint declared on `indexed` in the effective trait-schema.
 
 These rules are intentionally aligned with existing JSON Schema composition semantics and GTS schema chaining practices.
 
