@@ -119,7 +119,7 @@ This specification uses the following terms with precise meanings:
 
 - **GTS Type**: a type entity identified by a GTS Type Identifier and defined by a GTS Type Schema. A GTS Type may exist as a standalone document (e.g., a `*.schema.json` file), be exchanged between systems, or be stored in a GTS Registry.
 - **GTS Type Identifier**: a canonical GTS identifier ending with `~` that identifies a GTS Type.
-- **GTS Type Schema**: the canonical definition of a GTS Type — a JSON Schema document annotated with the GTS vocabulary (`x-gts-*`), describing the type's instance shape, traits, metadata, and relations.
+- **GTS Type Schema**: the canonical definition of a GTS Type. It is an **extension of JSON Schema** that adds GTS-specific keywords (`x-gts-*`) and a set of registry-enforced semantic rules describing the type's instance shape, traits, and derivation. GTS is **dialect-agnostic**: the underlying JSON Schema dialect of any concrete Type Schema is set by its `$schema` (the spec's examples use Draft-07 as the baseline for maximum interoperability, but Draft 2019-09 and 2020-12 are equally supported). GTS does not publish a dedicated `$schema` URI or meta-schema and is therefore not a [JSON Schema Dialect](https://json-schema.org/learn/glossary#dialect) in the formal sense; see §11.0 for details.
 
   Implementations MAY accept alternative source forms (e.g., TypeSpec, YAML) provided they deterministically map to a canonical GTS Type Schema. The canonical form, used for interchange, validation, and registration, is the JSON Schema document.
 - **GTS Registry**: a registry that stores and resolves GTS entities — Type Schemas and well-known Instances — by GTS Identifier.
@@ -321,7 +321,7 @@ GTS identifiers may be chained (e.g. `gts.A~B~C`). Validation MUST respect the l
 - **Schema → schema validation** (validate a derived schema against its predecessor schema):
   - Given a derived type identifier chain (e.g. `A~B~` or `A~B~C~`), the system MUST validate that each derived schema is compatible with its immediate predecessor in the chain.
   - The compatibility rule is: every valid instance of the derived schema MUST also be a valid instance of the base schema.
-  - When JSON Schema inheritance is expressed via `allOf` (recommended), the derived schema MUST be written such that it does not invalidate the compatibility guarantee.
+  - The derived schema MUST be written such that it does not invalidate this compatibility guarantee, regardless of how the parent's constraints are expressed: via `allOf` with a `$ref` to the parent (recommended, to avoid duplication of parent fields) or by re-declaring the parent's fields directly in the derived schema. See §11.0 for how GTS extends JSON Schema and [`adr/0001-derivation-form.md`](adr/0001-derivation-form.md) for the full discussion.
 
 - **`additionalProperties` and adding new properties**:
   - If a base schema (or any schema in the inheritance chain) defines an object with `additionalProperties: false`, then derived schemas MUST NOT introduce new properties at that object level that would be rejected by the base schema.
@@ -1294,7 +1294,7 @@ Implement and expose all operations OP#1–OP#13 listed above and add appropriat
 - **OP#9 - Version Casting**: Transform instances between compatible MINOR versions
 - **OP#10 - Query Execution**: Filter identifier collections using the GTS query language
 - **OP#11 - Attribute Access**: Retrieve property values and metadata using the attribute selector (`@`)
-- **OP#12 - Type Derivation Validation**: Validate that a derived type correctly extends its base chain. Today this includes JSON Schema-level constraint compatibility (derived schemas using `allOf` must conform to all constraints defined in their parent schemas throughout the inheritance hierarchy — `additionalProperties`, narrowing/widening, etc.) and trait inheritance from OP#13. This ensures type safety in extension and prevents constraint violations in multi-level type hierarchies. When validating derived types, if any base in the chain is marked `x-gts-final: true`, validation MUST fail (see section 9.11)
+- **OP#12 - Type Derivation Validation**: Validate that a derived type correctly extends its base chain. Today this includes JSON Schema-level constraint compatibility (every derived schema MUST conform to all constraints defined in its parent schemas throughout the inheritance hierarchy — `additionalProperties`, narrowing/widening, etc. — regardless of whether the derived schema references the parent via `allOf` + `$ref` or re-declares parent fields directly) and trait inheritance from OP#13. This ensures type safety in extension and prevents constraint violations in multi-level type hierarchies. When validating derived types, if any base in the chain is marked `x-gts-final: true`, validation MUST fail (see section 9.11)
 - **OP#13 - Schema Traits Validation**: Validate schema traits (`x-gts-traits-schema` / `x-gts-traits`). See section 9.7 for full semantics and validation rules.
 
 ### 9.3 - GTS entities registration
@@ -1560,7 +1560,7 @@ A **schema modifier** is a boolean annotation on a GTS Type Schema that restrict
 
 When a schema declares `"x-gts-final": true`:
 
-1. **Registration guard**: When a new schema is registered whose `allOf` / `$ref` chain references a final type as a base, the registry MUST reject the registration (when validation is enabled). Specifically, if the derived schema's `$id` is of the form `gts://gts.A~B~` and schema `A~` has `"x-gts-final": true`, then registering `A~B~` MUST fail.
+1. **Registration guard**: When a new schema is registered whose **`$id` chain** references a final type as a base, the registry MUST reject the registration (when validation is enabled). Specifically, if the derived schema's `$id` is of the form `gts://gts.A~B~` and schema `A~` has `"x-gts-final": true`, then registering `A~B~` MUST fail. This is determined from the chained `$id` alone — it does not depend on whether the derived schema body uses `allOf` to reference the parent.
 
 2. **Validation via `/validate-type-schema` (OP#12)**: When validating a derived schema against its base chain, if any base schema in the chain is marked `x-gts-final`, validation MUST fail with an error indicating that the base type is final and cannot be extended.
 
@@ -1695,13 +1695,17 @@ Result:    ❌ NO MATCH (different major versions)
 
 ## 11. JSON and JSON Schema Conventions
 
-### 11.0 JSON Schema Dialect
+### 11.0 Relationship to JSON Schema
 
-GTS Type Schemas are defined in terms of **JSON Schema Draft-07**. Implementations MUST treat the GTS keywords described in this specification (`$id`, `$ref`, `allOf`, `const`, `x-gts-traits-schema`, `x-gts-traits`, `x-gts-final`, `x-gts-abstract`, etc.) as layered on top of Draft-07 semantics.
+GTS Type Schemas **extend JSON Schema** with a vendor keyword set (`x-gts-*`) and a set of **registry-enforced semantic rules** (see §3.2 derivation, §9.11 modifiers, OP#12 derivation compatibility, OP#13 trait validation). GTS does **not** impose additional syntactic restrictions on otherwise-valid JSON Schemas: any syntactically valid JSON Schema that carries a valid GTS `$id` is a syntactically valid GTS Type Schema. Implementations MUST treat the GTS keywords described in this specification (`x-gts-traits-schema`, `x-gts-traits`, `x-gts-final`, `x-gts-abstract`, etc.) as layered on top of the underlying JSON Schema dialect's semantics, alongside the standard JSON Schema keywords (`$id`, `$ref`, `allOf`, `const`, …) used here.
 
-- The `$schema` field of every GTS Type Schema MUST be `http://json-schema.org/draft-07/schema#`.
-- Implementations MAY accept other JSON Schema dialects for non-GTS schemas, but MUST NOT rely on keywords introduced after Draft-07 (such as `prefixItems`, `unevaluatedProperties`, `unevaluatedItems`, `$dynamicRef`/`$dynamicAnchor`, `dependentRequired`, `dependentSchemas`) when interpreting GTS Type Schemas.
-- Reusable subschemas inside a GTS Type Schema SHOULD be placed under the Draft-07 canonical keyword `definitions`. Local JSON Pointer references such as `"$ref": "#/definitions/Foo"` are the recommended form.
+**Dialect-agnostic.** GTS does not pin Type Schemas to a single JSON Schema draft. The dialect of any concrete GTS Type Schema is set by its `$schema` URI, and implementations MUST honour that dialect when validating or interpreting the schema body. The reference examples in this specification declare `$schema: http://json-schema.org/draft-07/schema#` because Draft-07 has the broadest tooling support and is the safest baseline for cross-vendor interoperability; however, Type Schemas that declare a later dialect — Draft 2019-09 (`https://json-schema.org/draft/2019-09/schema`) or Draft 2020-12 (`https://json-schema.org/draft/2020-12/schema`) — are equally valid GTS Type Schemas. Authors who wish to use post-Draft-07 keywords (`$defs`, `prefixItems`, `unevaluatedProperties`, `unevaluatedItems`, `$dynamicRef`/`$dynamicAnchor`, `dependentRequired`, `dependentSchemas`, …) MAY do so, provided the dialect declared in `$schema` admits those keywords and the GTS-specific rules (derivation compatibility per OP#12, trait validation per OP#13, modifiers per §9.11) are satisfied.
+
+This specification does **not** publish a dedicated GTS meta-schema or `$schema` URI; `x-gts-*` keywords are vendor extensions layered over whichever JSON Schema dialect a Type Schema declares. GTS Type Schemas are therefore **not** a [JSON Schema Dialect](https://json-schema.org/learn/glossary#dialect) in the formal sense — all GTS-specific constraints are enforced at the registry, not by a meta-schema. Whether a future revision will eventually publish a dedicated `$schema` URI and meta-schema (and thereby make GTS a Dialect formally) is an open question; this specification does not commit to that path.
+
+JSON Schema has no native concept of derivation or inheritance — its closest primitive, [`allOf`](https://json-schema.org/understanding-json-schema/reference/combining#allof), is a logical AND over [subschemas](https://json-schema.org/learn/glossary#subschema) at instance-validation time. In GTS, derivation is expressed by the **chained `$id`** (e.g., `gts://A~B~`); the schema body MAY use `allOf` with a `$ref` to the parent — which is convenient for avoiding duplication of the parent's fields and constraints in the derived schema — but is **not strictly required**. A derived schema that re-declares the parent's fields directly without `allOf` is admissible, provided it satisfies derivation compatibility (OP#12). See [`adr/0001-derivation-form.md`](adr/0001-derivation-form.md) for the full discussion.
+
+- Reusable subschemas inside a GTS Type Schema SHOULD be placed under the canonical container for the dialect declared by `$schema`: `definitions` for Draft-07, `$defs` for Draft 2019-09 and later. Local JSON Pointer references such as `"$ref": "#/definitions/Foo"` (Draft-07) or `"$ref": "#/$defs/Foo"` (Draft 2019-09+) are the recommended form.
 
 ### 11.1 Global rules: schema vs instance, normalization, and document categories
 
