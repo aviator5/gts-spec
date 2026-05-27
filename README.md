@@ -1335,7 +1335,7 @@ Implementation notes:
 
 ### 9.7 - GTS Type Schema Traits (`x-gts-traits-schema` / `x-gts-traits`)
 
-**OP#13 - Schema Traits Validation**: Validate that `x-gts-traits` values in derived schemas conform to the `x-gts-traits-schema` defined in their base schemas. Verify that all trait properties are resolved (via direct value or `default`) and that trait values satisfy the trait schema constraints. Trait values set by an ancestor are immutable — descendants MUST NOT override them with a different value. Both `x-gts-traits-schema` and `x-gts-traits` are schema-only keywords and MUST NOT appear in instances. `x-gts-traits-schema` MUST be a valid JSON Schema subschema (object, `true`, or `false`). Uses the same validation endpoints (`/validate-type-schema`, `/validate-entity`).
+**OP#13 - Schema Traits Validation**: Validate that `x-gts-traits` values in derived schemas conform to the `x-gts-traits-schema` defined in their base schemas. Verify that, for non-abstract types, all required trait properties in the effective trait-schema are resolved (via explicit value in the chain-merged `x-gts-traits` or via `default` in the effective trait-schema), and that trait values satisfy the effective trait-schema's other constraints. Trait values set by an ancestor are immutable — descendants MUST NOT override them with a different value. Both `x-gts-traits-schema` and `x-gts-traits` are schema-only keywords and MUST NOT appear in instances. `x-gts-traits-schema` MUST be a valid JSON Schema subschema (object, `true`, or `false`). Uses the same validation endpoints (`/validate-type-schema`, `/validate-entity`).
 
 A **schema trait** is a semantic annotation attached to a GTS Type Schema that describes **system behaviour** for processing instances of that type. Traits are not part of the object data model — they do not define instance properties. Instead, they configure cross-cutting concerns such as:
 
@@ -1511,9 +1511,8 @@ Given an inheritance chain `S₀ → S₁ → … → Sₙ`:
   - Defaults declared in the effective trait schema SHOULD be used as normal JSON Schema defaults to produce a complete effective traits object.
 
 - **Validation**
-  - The registry MUST validate the effective traits object against the effective trait schema using standard JSON Schema validation.
+  - **Completeness check** (registration-time): For types whose `x-gts-abstract` is not `true`, the registry MUST verify that the *materialized* effective traits object validates against the effective trait-schema using standard JSON Schema validation. "Materialized" means: defaults declared in the effective trait-schema for properties not present in the chain-merged effective traits object are substituted in before validation. If validation fails — in particular, if a `required` property of the effective trait-schema has no chain-assigned value and no default — registration MUST fail. For types with `x-gts-abstract: true`, this completeness check is skipped; descendants are expected to close any unresolved required traits. See [`adr/0003-x-gts-traits-completeness.md`](adr/0003-x-gts-traits-completeness.md) for the rationale.
   - If the effective trait schema cannot be satisfied (e.g., contradictory constraints introduced across the chain), schema validation MUST fail.
-  - If a trait is required by the effective trait schema (i.e., not covered by a default) but is not provided by any `x-gts-traits` in the chain, schema validation MUST fail for concrete (leaf) schemas.
   - If a descendant attempts to override a trait value already set by an ancestor with a different value, schema validation MUST fail.
 
 **Example — immutable trait override (failure):**
@@ -1622,9 +1621,11 @@ When a schema declares `"x-gts-abstract": true`:
 
 #### 9.11.4 Interaction with `x-gts-traits`
 
-- **Abstract types with traits**: An abstract base type MAY declare `x-gts-traits-schema`. Since abstract types cannot have direct instances, trait values (`x-gts-traits`) do not need to be fully resolved on the abstract type itself. Trait resolution completeness is only enforced on concrete (leaf) schemas (this is already the existing behavior from section 9.7.5).
+- **Completeness keyed on `x-gts-abstract`**: A type whose `x-gts-abstract` is not `true` MUST satisfy trait completeness at registration (see §9.7.5). A type with `x-gts-abstract: true` is exempt — abstract types may have unresolved required traits; descendants are expected to close them. See [`adr/0003-x-gts-traits-completeness.md`](adr/0003-x-gts-traits-completeness.md).
 
-- **Final types with traits**: A final type MAY declare `x-gts-traits` values. Since no derived types can exist, all trait values MUST be fully resolved on the final type itself. If the effective trait schema has required properties without defaults and the final type does not provide them via `x-gts-traits`, validation MUST fail.
+- **Final types follow the non-abstract rule**: A type with `x-gts-final: true` is non-abstract by definition (abstract+final is rejected per §9.11.1) and therefore subject to the completeness check. Because no further descendants are permitted, completeness must be satisfied by the final type itself — by chain-inherited values, locally declared `x-gts-traits`, or `default`s in the effective trait-schema.
+
+- **Abstract types may declare `x-gts-traits-schema`**: Doing so contributes to the effective trait-schema of descendants; the abstract type itself is not required to provide values.
 
 #### 9.11.5 Registration enforcement
 
