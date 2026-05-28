@@ -238,7 +238,7 @@ The completeness check applies if and only if the type's `x-gts-abstract` is not
 At the registration of type T:
 
 1. Compute *effective trait-schema* = JSON Schema `allOf` composition of all `x-gts-traits-schema` declarations along T's `$id` chain (per ADR-0002).
-2. Compute *effective traits object* = chain-merged `x-gts-traits` along T's `$id` chain (subject to the immutable-once-set rule for inherited values).
+2. Compute *effective traits object* = chain-merged `x-gts-traits` along T's `$id` chain (per ADR-0004, RFC 7396 JSON Merge Patch root → leaf).
 3. *Materialize* the effective traits object: for every property declared in the effective trait-schema with a `default` and no value in the merged object, substitute the default value.
 4. If `T.x-gts-abstract` is `true`: skip the completeness check (other validations on T still run normally).
 5. Otherwise: validate the materialized effective traits object against the effective trait-schema using standard JSON Schema validation. If validation fails (including `required` properties absent after materialization), registration MUST fail with an error citing the unresolved required properties.
