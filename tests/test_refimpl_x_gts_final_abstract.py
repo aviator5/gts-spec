@@ -711,10 +711,14 @@ class TestCaseAbstract_RegistrationGuardRejectsInstance(HttpRunner):
 
 
 class TestCaseFinal_InsideAllOfRejected(HttpRunner):
-    """x-gts-final inside allOf MUST be rejected — keyword must be at top level.
+    """x-gts-final inside allOf MUST be rejected — modifier belongs on the type, not on a subschema.
 
-    The keyword is placed inside an allOf entry instead of at the schema
-    top level. Registration with validation should reject this.
+    Normative basis: README §9.11.2 item 5 ("Keyword placement") — x-gts-final
+    MUST appear at the top level, NOT inside the allOf entries. (ADR-0001 frames
+    derivation form as dialect-agnostic, so the body shape is otherwise free; the
+    placement rule for the modifier itself lives in §9.11.2(5).) Placing it inside
+    an allOf entry attaches it to a subschema; registration with validation MUST
+    reject this.
     """
 
     config = Config("final: inside allOf rejected").base_url(get_gts_base_url())
@@ -752,7 +756,13 @@ class TestCaseFinal_InsideAllOfRejected(HttpRunner):
 
 
 class TestCaseAbstract_InsideAllOfRejected(HttpRunner):
-    """x-gts-abstract inside allOf MUST be rejected — keyword must be at top level."""
+    """x-gts-abstract inside allOf MUST be rejected — modifier belongs on the type, not on a subschema.
+
+    Normative basis: README §9.11.3 item 6 ("Keyword placement") — x-gts-abstract,
+    like x-gts-final, is a type-level modifier and MUST appear at the top level,
+    NOT inside an allOf entry. Placing it inside an allOf subschema is a
+    misplacement and MUST be rejected on registration (with validation).
+    """
 
     config = Config("abstract: inside allOf rejected").base_url(get_gts_base_url())
 
@@ -872,8 +882,9 @@ class TestCaseInteraction_FinalWithTraitsFullyResolved(HttpRunner):
 class TestCaseInteraction_FinalWithTraitsMissing(HttpRunner):
     """Final type with unresolved required traits — validation fails.
 
-    A final type cannot delegate trait resolution to descendants,
-    so all required traits without defaults MUST be provided.
+    Corollary of ADR-0003: trait completeness applies to non-abstract types;
+    final types are non-abstract by definition, so all required traits
+    without defaults MUST be resolved at the final type itself.
     """
 
     config = Config("interaction: final with missing traits").base_url(get_gts_base_url())
@@ -918,8 +929,9 @@ class TestCaseInteraction_FinalWithTraitsMissing(HttpRunner):
 class TestCaseInteraction_AbstractWithIncompleteTraitsOk(HttpRunner):
     """Abstract type with unresolved traits — validation passes.
 
-    Abstract types are not leaf schemas, so trait resolution completeness
-    is not enforced on them.
+    Per ADR-0003, trait completeness is enforced on non-abstract types
+    (x-gts-abstract != true). Abstract types skip the check; descendants
+    are expected to close any gaps.
     """
 
     config = Config("interaction: abstract with incomplete traits ok").base_url(get_gts_base_url())
