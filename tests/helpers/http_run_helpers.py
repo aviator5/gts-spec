@@ -10,9 +10,9 @@ from httprunner import Step, RunRequest
 def register(gts_id, schema_body, label="register schema"):
     """Register a schema via POST /entities."""
     body = {
+        **schema_body,
         "$$id": gts_id,
         "$$schema": "http://json-schema.org/draft-07/schema#",
-        **schema_body,
     }
     return Step(
         RunRequest(label)
@@ -36,11 +36,15 @@ def register_derived(gts_id, base_ref, overlay, label="register derived", top_le
     the spec-correct placement without restating every call site.
     """
     overlay = dict(overlay)
-    hoisted = {
-        kw: overlay.pop(kw)
-        for kw in ("x-gts-traits", "x-gts-traits-schema")
-        if kw in overlay
-    }
+    trait_kws = ("x-gts-traits", "x-gts-traits-schema")
+    hoisted = {kw: overlay.pop(kw) for kw in trait_kws if kw in overlay}
+    if top_level:
+        clobbered = [kw for kw in trait_kws if kw in top_level]
+        if clobbered:
+            raise ValueError(
+                "top_level must not contain trait keywords "
+                f"{clobbered}; pass them in `overlay` so they are hoisted"
+            )
     body = {
         "$$id": gts_id,
         "$$schema": "http://json-schema.org/draft-07/schema#",
@@ -78,9 +82,9 @@ def register_derived_redeclared(
     top_level: optional dict merged into body at the top level.
     """
     full = {
+        **body,
         "$$id": gts_id,
         "$$schema": "http://json-schema.org/draft-07/schema#",
-        **body,
     }
     if top_level:
         full.update(top_level)
@@ -100,9 +104,9 @@ def register_abstract(gts_id, schema_body, label="register abstract"):
     /validate-type-schema time.
     """
     body = {
+        **schema_body,
         "$$id": gts_id,
         "$$schema": "http://json-schema.org/draft-07/schema#",
-        **schema_body,
         "x-gts-abstract": True,
     }
     return Step(

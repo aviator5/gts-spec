@@ -2188,9 +2188,20 @@ class TestCaseTestOp12_ConstraintDropMinItems(HttpRunner):
         extra_base={"items": {"type": "string"}})
 
 
-class TestCaseTestOp12_AdditionalPropertiesLoosened(HttpRunner):
-    """OP#12 - Base AP false, derived sets AP true → must fail."""
-    config = Config("OP#12 - additionalProperties Loosened").base_url(
+class TestCaseTestOp12_AdditionalPropertiesTrueInOverlayStaysClosed(HttpRunner):
+    """OP#12 - Base AP false; derived overlay sets AP true → still closed, passes.
+
+    The derived schema is `allOf: [{$ref: closed_base}, {…, AP: true}]`.
+    Under JSON Schema draft-07, allOf is a conjunction: an instance must
+    validate against *every* branch. The base branch (AP:false over its
+    own `properties`) independently rejects any extra top-level key, and
+    the overlay's `additionalProperties: true` cannot override another
+    branch's constraint — allOf composes, it does not merge. The combined
+    schema therefore remains closed, so this is **not** loosening and OP#12
+    must accept it. Flagging it would require structural intent-detection
+    rather than effective-instance semantics.
+    """
+    config = Config("OP#12 - additionalProperties true in overlay stays closed").base_url(
         get_gts_base_url())
 
     def test_start(self):
@@ -2211,18 +2222,29 @@ class TestCaseTestOp12_AdditionalPropertiesLoosened(HttpRunner):
                 "properties": {"id": {"type": "string"}},
                 "additionalProperties": True,
             },
-            "register derived setting AP true",
+            "register derived with AP true in overlay",
         ),
         _validate_type_schema(
             "gts.x.test12.ap.loose.v1~x.test12._.opened.v1~",
-            False, "validate should fail - AP loosened",
+            True, "validate should pass - base branch still denies extras via allOf",
         ),
     ]
 
 
-class TestCaseTestOp12_AdditionalPropertiesOmitted(HttpRunner):
-    """OP#12 - Base AP false, derived omits AP → must fail."""
-    config = Config("OP#12 - additionalProperties Omitted").base_url(
+class TestCaseTestOp12_AdditionalPropertiesOmittedInheritsClosedness(HttpRunner):
+    """OP#12 - Base AP false, derived omits AP → inherits closedness, passes.
+
+    The derived schema is `allOf: [{$ref: closed_base}, overlay]` and omits
+    `additionalProperties` at its own root. Per draft-07 § 6.5.6,
+    `additionalProperties` only inspects sibling `properties` at the same
+    level — but the base's `additionalProperties: false` still applies to
+    the same instance through the `$ref` half of the allOf composition.
+    The closedness is therefore *inherited*; omitting the keyword is not
+    loosening, and OP#12 must accept this shape. (A derived schema that
+    wants to genuinely open up cannot do so via allOf at all — see
+    TestCaseTestOp12_AdditionalPropertiesTrueInOverlayStaysClosed.)
+    """
+    config = Config("OP#12 - additionalProperties omitted inherits closedness").base_url(
         get_gts_base_url())
 
     def test_start(self):
@@ -2246,7 +2268,7 @@ class TestCaseTestOp12_AdditionalPropertiesOmitted(HttpRunner):
         ),
         _validate_type_schema(
             "gts.x.test12.ap.omit.v1~x.test12._.no_ap.v1~",
-            False, "validate should fail - AP omitted",
+            True, "validate should pass - closedness inherited via $ref/allOf",
         ),
     ]
 
