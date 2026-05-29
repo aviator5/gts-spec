@@ -8,10 +8,6 @@
     {
       "type": "object",
       "required": ["type", "payload", "subjectType"],
-      "x-gts-traits": {
-        "topicRef": "gts.x.core.events.topic.v1~x.commerce._.orders.v1",
-        "retention": "P90D"
-      },
       "properties": {
         "type": {
           "const": "gts.x.core.events.type.v1~x.commerce.orders.order_placed.v1.1~",
@@ -34,5 +30,9 @@
         }
       }
     }
-  ]
+  ],
+  "x-gts-traits": {
+    "topicRef": "gts.x.core.events.topic.v1~x.commerce._.orders.v1",
+    "retention": "P90D"
+  }
 }

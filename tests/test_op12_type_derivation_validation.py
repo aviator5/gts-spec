@@ -2,6 +2,7 @@ from .conftest import get_gts_base_url
 from .helpers.http_run_helpers import (
     register as _register,
     register_derived as _register_derived,
+    register_derived_redeclared as _register_derived_redeclared,
     validate_type_schema as _validate_type_schema,
 )
 from httprunner import HttpRunner, Config, Step, RunRequest
@@ -2187,9 +2188,20 @@ class TestCaseTestOp12_ConstraintDropMinItems(HttpRunner):
         extra_base={"items": {"type": "string"}})
 
 
-class TestCaseTestOp12_AdditionalPropertiesLoosened(HttpRunner):
-    """OP#12 - Base AP false, derived sets AP true → must fail."""
-    config = Config("OP#12 - additionalProperties Loosened").base_url(
+class TestCaseTestOp12_AdditionalPropertiesTrueInOverlayStaysClosed(HttpRunner):
+    """OP#12 - Base AP false; derived overlay sets AP true → still closed, passes.
+
+    The derived schema is `allOf: [{$ref: closed_base}, {…, AP: true}]`.
+    Under JSON Schema draft-07, allOf is a conjunction: an instance must
+    validate against *every* branch. The base branch (AP:false over its
+    own `properties`) independently rejects any extra top-level key, and
+    the overlay's `additionalProperties: true` cannot override another
+    branch's constraint — allOf composes, it does not merge. The combined
+    schema therefore remains closed, so this is **not** loosening and OP#12
+    must accept it. Flagging it would require structural intent-detection
+    rather than effective-instance semantics.
+    """
+    config = Config("OP#12 - additionalProperties true in overlay stays closed").base_url(
         get_gts_base_url())
 
     def test_start(self):
@@ -2210,18 +2222,29 @@ class TestCaseTestOp12_AdditionalPropertiesLoosened(HttpRunner):
                 "properties": {"id": {"type": "string"}},
                 "additionalProperties": True,
             },
-            "register derived setting AP true",
+            "register derived with AP true in overlay",
         ),
         _validate_type_schema(
             "gts.x.test12.ap.loose.v1~x.test12._.opened.v1~",
-            False, "validate should fail - AP loosened",
+            True, "validate should pass - base branch still denies extras via allOf",
         ),
     ]
 
 
-class TestCaseTestOp12_AdditionalPropertiesOmitted(HttpRunner):
-    """OP#12 - Base AP false, derived omits AP → must fail."""
-    config = Config("OP#12 - additionalProperties Omitted").base_url(
+class TestCaseTestOp12_AdditionalPropertiesOmittedInheritsClosedness(HttpRunner):
+    """OP#12 - Base AP false, derived omits AP → inherits closedness, passes.
+
+    The derived schema is `allOf: [{$ref: closed_base}, overlay]` and omits
+    `additionalProperties` at its own root. Per draft-07 § 6.5.6,
+    `additionalProperties` only inspects sibling `properties` at the same
+    level — but the base's `additionalProperties: false` still applies to
+    the same instance through the `$ref` half of the allOf composition.
+    The closedness is therefore *inherited*; omitting the keyword is not
+    loosening, and OP#12 must accept this shape. (A derived schema that
+    wants to genuinely open up cannot do so via allOf at all — see
+    TestCaseTestOp12_AdditionalPropertiesTrueInOverlayStaysClosed.)
+    """
+    config = Config("OP#12 - additionalProperties omitted inherits closedness").base_url(
         get_gts_base_url())
 
     def test_start(self):
@@ -2245,7 +2268,7 @@ class TestCaseTestOp12_AdditionalPropertiesOmitted(HttpRunner):
         ),
         _validate_type_schema(
             "gts.x.test12.ap.omit.v1~x.test12._.no_ap.v1~",
-            False, "validate should fail - AP omitted",
+            True, "validate should pass - closedness inherited via $ref/allOf",
         ),
     ]
 
@@ -3519,6 +3542,636 @@ class TestCaseOp12_FinalBase_SelfValidationPasses(HttpRunner):
             "gts.x.test12.finalself.base.v1~",
             True,
             "validate final base itself should pass",
+        ),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# ADR-0001: derivation form
+#
+# GTS is a JSON Schema extension, dialect-agnostic (not a formal JSON Schema
+# Dialect — it ships no dedicated $schema URI or meta-schema). The dialect of
+# any concrete Type Schema is what its own $schema declares (Draft-07 is the
+# example baseline; Draft 2019-09 and 2020-12 are equally supported).
+#
+# OP#12 compatibility applies to derived schemas regardless of whether they
+# use allOf + $ref or re-declare parent fields directly. x-gts-final is
+# enforced from the chained $id alone, not from body shape.
+# ---------------------------------------------------------------------------
+
+
+class TestCaseOp12_Redeclared_CompatiblePasses(HttpRunner):
+    """ADR-0001: derived schema without allOf, re-declaring parent fields.
+
+    Compatible re-declaration plus an added optional field. Passes OP#12.
+    """
+
+    config = Config("OP#12 ADR-0001: redeclared compatible passes").base_url(
+        get_gts_base_url()
+    )
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            "gts://gts.x.test12.redcmp.user.v1~",
+            {
+                "type": "object",
+                "required": ["userId", "name"],
+                "properties": {
+                    "userId": {"type": "string", "format": "uuid"},
+                    "name": {"type": "string", "maxLength": 100},
+                },
+            },
+            "register base user",
+        ),
+        _register_derived_redeclared(
+            "gts://gts.x.test12.redcmp.user.v1~x.test12._.premium.v1~",
+            "gts://gts.x.test12.redcmp.user.v1~",
+            {
+                "type": "object",
+                "required": ["userId", "name"],
+                "properties": {
+                    "userId": {"type": "string", "format": "uuid"},
+                    "name": {"type": "string", "maxLength": 100},
+                    "tier": {"type": "string"},
+                },
+            },
+            "register derived without allOf",
+        ),
+        _validate_type_schema(
+            "gts.x.test12.redcmp.user.v1~x.test12._.premium.v1~",
+            True,
+            "validate redeclared derived - compatible",
+        ),
+    ]
+
+
+class TestCaseOp12_Redeclared_TypeTighteningPasses(HttpRunner):
+    """ADR-0001: redeclared derived narrows email format. Valid OP#12 tightening."""
+
+    config = Config("OP#12 ADR-0001: redeclared tightening passes").base_url(
+        get_gts_base_url()
+    )
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            "gts://gts.x.test12.redtight.user.v1~",
+            {
+                "type": "object",
+                "required": ["userId", "contact"],
+                "properties": {
+                    "userId": {"type": "string"},
+                    "contact": {"type": "string"},
+                },
+            },
+            "register base user",
+        ),
+        _register_derived_redeclared(
+            "gts://gts.x.test12.redtight.user.v1~x.test12._.emailed.v1~",
+            "gts://gts.x.test12.redtight.user.v1~",
+            {
+                "type": "object",
+                "required": ["userId", "contact"],
+                "properties": {
+                    "userId": {"type": "string"},
+                    "contact": {"type": "string", "format": "email"},
+                },
+            },
+            "register derived - tightens contact to format:email",
+        ),
+        _validate_type_schema(
+            "gts.x.test12.redtight.user.v1~x.test12._.emailed.v1~",
+            True,
+            "validate redeclared derived - tightening allowed",
+        ),
+    ]
+
+
+class TestCaseOp12_Redeclared_ConstraintViolationFails(HttpRunner):
+    """ADR-0001: redeclared derived loosens maxLength. Must fail OP#12."""
+
+    config = Config("OP#12 ADR-0001: redeclared loosening fails").base_url(
+        get_gts_base_url()
+    )
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            "gts://gts.x.test12.redloose.user.v1~",
+            {
+                "type": "object",
+                "required": ["userId", "name"],
+                "properties": {
+                    "userId": {"type": "string"},
+                    "name": {"type": "string", "maxLength": 64},
+                },
+            },
+            "register base with name maxLength=64",
+        ),
+        _register_derived_redeclared(
+            "gts://gts.x.test12.redloose.user.v1~x.test12._.wider.v1~",
+            "gts://gts.x.test12.redloose.user.v1~",
+            {
+                "type": "object",
+                "required": ["userId", "name"],
+                "properties": {
+                    "userId": {"type": "string"},
+                    "name": {"type": "string", "maxLength": 256},
+                },
+            },
+            "register derived loosens name maxLength to 256",
+        ),
+        _validate_type_schema(
+            "gts.x.test12.redloose.user.v1~x.test12._.wider.v1~",
+            False,
+            "validate redeclared derived - loosening rejected",
+        ),
+    ]
+
+
+class TestCaseOp12_Redeclared_DropsParentRequiredFails(HttpRunner):
+    """ADR-0001: redeclared derived omits parent's required field. Must fail OP#12."""
+
+    config = Config("OP#12 ADR-0001: redeclared drops required").base_url(
+        get_gts_base_url()
+    )
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            "gts://gts.x.test12.redreq.user.v1~",
+            {
+                "type": "object",
+                "required": ["userId", "email"],
+                "properties": {
+                    "userId": {"type": "string"},
+                    "email": {"type": "string"},
+                },
+            },
+            "register base requiring userId and email",
+        ),
+        _register_derived_redeclared(
+            "gts://gts.x.test12.redreq.user.v1~x.test12._.lax.v1~",
+            "gts://gts.x.test12.redreq.user.v1~",
+            {
+                "type": "object",
+                "required": ["userId"],
+                "properties": {
+                    "userId": {"type": "string"},
+                    "email": {"type": "string"},
+                },
+            },
+            "register derived dropping email from required",
+        ),
+        _validate_type_schema(
+            "gts.x.test12.redreq.user.v1~x.test12._.lax.v1~",
+            False,
+            "validate redeclared derived - dropped required field",
+        ),
+    ]
+
+
+class TestCaseOp12_Redeclared_AddsAPFalseTightening_Passes(HttpRunner):
+    """ADR-0001: redeclared derived tightens by adding additionalProperties:false.
+
+    OP#12 requires every valid instance of the derived schema to be valid in
+    the base — i.e. derived may tighten, never loosen. Closing an open base
+    with additionalProperties:false in the derived is a valid tightening and
+    MUST pass. (This replaces an earlier mis-stated case where the assertion
+    was backwards.)
+    """
+
+    config = Config("OP#12 ADR-0001: redeclared AP:false tightening").base_url(
+        get_gts_base_url()
+    )
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            "gts://gts.x.test12.redapf.user.v1~",
+            {
+                "type": "object",
+                "required": ["userId"],
+                "properties": {
+                    "userId": {"type": "string"},
+                    "email": {"type": "string"},
+                },
+            },
+            "register open base",
+        ),
+        _register_derived_redeclared(
+            "gts://gts.x.test12.redapf.user.v1~x.test12._.closed.v1~",
+            "gts://gts.x.test12.redapf.user.v1~",
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["userId"],
+                "properties": {
+                    "userId": {"type": "string"},
+                    "email": {"type": "string"},
+                },
+            },
+            "register redeclared derived closing open base with AP:false",
+        ),
+        _validate_type_schema(
+            "gts.x.test12.redapf.user.v1~x.test12._.closed.v1~",
+            True,
+            "validate redeclared derived - tightening allowed",
+        ),
+    ]
+
+
+class TestCaseOp12_FinalBase_RedeclaredDerivationStillRejected(HttpRunner):
+    """ADR-0001: x-gts-final enforced from $id chain alone, not body shape.
+
+    Base is final. A derived schema authored WITHOUT allOf (re-declaration
+    form) and otherwise semantically compatible MUST still be rejected,
+    because finality is keyed on the chained $id.
+    """
+
+    config = Config("OP#12 ADR-0001: final base rejects redeclared derivation").base_url(
+        get_gts_base_url()
+    )
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            "gts://gts.x.test12.redfinb.user.v1~",
+            {
+                "type": "object",
+                "x-gts-final": True,
+                "required": ["userId"],
+                "properties": {
+                    "userId": {"type": "string"},
+                    "name": {"type": "string"},
+                },
+            },
+            "register final base",
+        ),
+        _register_derived_redeclared(
+            "gts://gts.x.test12.redfinb.user.v1~x.test12._.kid.v1~",
+            "gts://gts.x.test12.redfinb.user.v1~",
+            {
+                "type": "object",
+                "required": ["userId"],
+                "properties": {
+                    "userId": {"type": "string"},
+                    "name": {"type": "string"},
+                    "nickname": {"type": "string"},
+                },
+            },
+            "register redeclared derived from final base (no allOf in body)",
+        ),
+        _validate_type_schema(
+            "gts.x.test12.redfinb.user.v1~x.test12._.kid.v1~",
+            False,
+            "validate derived from final base - rejected by $id-chain finality",
+        ),
+    ]
+
+
+class TestCaseOp12_Redeclared_HybridAllOfPlusToplevel(HttpRunner):
+    """ADR-0001: hybrid form — allOf:[{$ref:parent}] AND top-level properties.
+
+    Demonstrates the extension-framing principle: derivation forms are not
+    syntactically restricted. A compatible hybrid form must pass OP#12.
+    """
+
+    config = Config("OP#12 ADR-0001: hybrid allOf + toplevel passes").base_url(
+        get_gts_base_url()
+    )
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            "gts://gts.x.test12.redhyb.user.v1~",
+            {
+                "type": "object",
+                "required": ["userId"],
+                "properties": {
+                    "userId": {"type": "string"},
+                    "name": {"type": "string"},
+                },
+            },
+            "register base user",
+        ),
+        Step(
+            RunRequest("register hybrid derived (allOf + top-level properties)")
+            .post("/entities")
+            .with_json({
+                "$$id": (
+                    "gts://gts.x.test12.redhyb.user.v1~"
+                    "x.test12._.hybrid.v1~"
+                ),
+                "$$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [
+                    {"$$ref": "gts://gts.x.test12.redhyb.user.v1~"},
+                ],
+                "properties": {
+                    "tier": {"type": "string"},
+                },
+            })
+            .validate()
+            .assert_equal("status_code", 200)
+        ),
+        _validate_type_schema(
+            "gts.x.test12.redhyb.user.v1~x.test12._.hybrid.v1~",
+            True,
+            "validate hybrid derived - passes",
+        ),
+    ]
+
+
+class TestCaseOp12_Redeclared_ChangePropertyDefaultAllowed(HttpRunner):
+    """§3.1 / OP#12: derived may redeclare a property's `default`.
+
+    Narrowing is defined over the set of valid instances. `default` is a
+    JSON Schema annotation and does not participate in validation, so
+    changing it neither tightens nor loosens the validation surface. A
+    derived type MAY redeclare `properties.<name>.default` freely.
+
+    Base declares `tier.default = "free"`. Derived redeclares
+    `tier.default = "gold"` (with no other changes that would violate
+    OP#12). Validation MUST pass.
+    """
+
+    config = Config("OP#12: redeclare property default allowed").base_url(
+        get_gts_base_url()
+    )
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            "gts://gts.x.test12.pdfl.user.v1~",
+            {
+                "type": "object",
+                "required": ["userId"],
+                "properties": {
+                    "userId": {"type": "string"},
+                    "tier": {"type": "string", "default": "free"},
+                },
+            },
+            "register base with tier default=free",
+        ),
+        _register_derived_redeclared(
+            "gts://gts.x.test12.pdfl.user.v1~x.test12._.premium.v1~",
+            "gts://gts.x.test12.pdfl.user.v1~",
+            {
+                "type": "object",
+                "required": ["userId"],
+                "properties": {
+                    "userId": {"type": "string"},
+                    "tier": {"type": "string", "default": "gold"},
+                },
+            },
+            "register derived redeclaring tier default=gold",
+        ),
+        _validate_type_schema(
+            "gts.x.test12.pdfl.user.v1~x.test12._.premium.v1~",
+            True,
+            "validate - default redeclaration does not violate OP#12",
+        ),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# v0.12 changelog: "the prior $defs MUST NOT and post-Draft-07-keyword
+# restrictions are dropped". README §11.0 (Relationship to JSON Schema)
+# frames GTS as dialect-agnostic; the §9.5 note on $ref now spells out:
+# "definitions for Draft-07, $defs for Draft 2019-09 and later; both are
+# admissible in GTS Type Schemas." This test exercises the dropped
+# restriction directly via a Draft 2019-09 base that defines reusable
+# subschemas in $defs and references them locally.
+# ---------------------------------------------------------------------------
+
+
+class TestCaseOp12_Dialect_2019_09_DefsAllowed(HttpRunner):
+    """v0.12 / ADR-0001: Draft 2019-09 with $defs is a valid GTS Type Schema.
+
+    Before v0.12 the spec forbade $defs and post-Draft-07 keywords. ADR-0001
+    reframes GTS as dialect-agnostic; the README changelog calls this out as
+    a breaking change. Register a base under Draft 2019-09 that uses $defs
+    for a reusable subschema; both registration and validation must succeed.
+    """
+
+    config = Config("OP#12 v0.12: Draft 2019-09 with $$defs allowed").base_url(
+        get_gts_base_url()
+    )
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        Step(
+            RunRequest("register Draft 2019-09 base using $$defs")
+            .post("/entities")
+            .with_json({
+                "$$id": "gts://gts.x.test12.dialect09.user.v1~",
+                "$$schema": "https://json-schema.org/draft/2019-09/schema",
+                "type": "object",
+                "$$defs": {
+                    "NonEmptyString": {"type": "string", "minLength": 1},
+                },
+                "required": ["userId", "name"],
+                "properties": {
+                    "userId": {"$$ref": "#/$$defs/NonEmptyString"},
+                    "name": {"$$ref": "#/$$defs/NonEmptyString"},
+                },
+            })
+            .validate()
+            .assert_equal("status_code", 200)
+        ),
+        _validate_type_schema(
+            "gts.x.test12.dialect09.user.v1~",
+            True,
+            "validate Draft 2019-09 base - $$defs admissible",
+        ),
+    ]
+
+
+class TestCaseOp12_Dialect_2020_12_PrefixItemsAllowed(HttpRunner):
+    """v0.12 / ADR-0001: Draft 2020-12 with prefixItems is a valid GTS Type Schema.
+
+    ADR-0001 reframes GTS as dialect-agnostic; README §11.0 lists Draft 2020-12
+    as equally valid and prefixItems among the admissible post-Draft-07 keywords.
+    Register a base under Draft 2020-12 that uses prefixItems; both registration
+    and validation must succeed. (Complements the Draft 2019-09 / $defs case.)
+    """
+
+    config = Config("OP#12 v0.12: Draft 2020-12 with prefixItems allowed").base_url(
+        get_gts_base_url()
+    )
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        Step(
+            RunRequest("register Draft 2020-12 base using prefixItems")
+            .post("/entities")
+            .with_json({
+                "$$id": "gts://gts.x.test12.dialect20.coord.v1~",
+                "$$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "required": ["point"],
+                "properties": {
+                    "point": {
+                        "type": "array",
+                        "prefixItems": [
+                            {"type": "number"},
+                            {"type": "number"},
+                        ],
+                        "items": False,
+                    },
+                },
+            })
+            .validate()
+            .assert_equal("status_code", 200)
+        ),
+        _validate_type_schema(
+            "gts.x.test12.dialect20.coord.v1~",
+            True,
+            "validate Draft 2020-12 base - prefixItems admissible",
+        ),
+    ]
+
+
+class TestCaseOp12_Redeclared_MixedDialectChain(HttpRunner):
+    """ADR-0001: per-schema $schema — a Draft-07 base with a Draft 2019-09 derived.
+
+    GTS pins no single draft; each schema's dialect is set by its own $schema
+    (README §11.0). The derived re-declares the parent's fields (no allOf) and
+    only tightens (maxLength 100 → 50), so OP#12 compatibility holds across the
+    dialect boundary. Validation passes.
+    """
+
+    config = Config(
+        "OP#12 ADR-0001: mixed-dialect chain (07 base, 2019-09 derived)"
+    ).base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            "gts://gts.x.test12.mixdia.user.v1~",
+            {
+                "type": "object",
+                "required": ["userId"],
+                "properties": {
+                    "userId": {"type": "string"},
+                    "name": {"type": "string", "maxLength": 100},
+                },
+            },
+            "register Draft-07 base",
+        ),
+        Step(
+            RunRequest("register Draft 2019-09 derived re-declaring + tightening")
+            .post("/entities")
+            .with_json({
+                "$$id": "gts://gts.x.test12.mixdia.user.v1~x.test12._.premium.v1~",
+                "$$schema": "https://json-schema.org/draft/2019-09/schema",
+                "type": "object",
+                "required": ["userId"],
+                "properties": {
+                    "userId": {"type": "string"},
+                    "name": {"type": "string", "maxLength": 50},
+                },
+            })
+            .validate()
+            .assert_equal("status_code", 200)
+        ),
+        _validate_type_schema(
+            "gts.x.test12.mixdia.user.v1~x.test12._.premium.v1~",
+            True,
+            "validate mixed-dialect derived - tightening across dialect boundary",
+        ),
+    ]
+
+
+class TestCaseOp12_Redeclared_ThreeLevelChainCompatible(HttpRunner):
+    """ADR-0001 / §3.2: 3-level chain A~B~C re-declared without allOf.
+
+    Each level restates the parent's fields directly (no allOf) and tightens
+    `maxLength` monotonically (100 → 80 → 50). OP#12 must hold transitively
+    across the whole multi-level hierarchy (README OP#12 line ~1298). The leaf
+    validates.
+    """
+
+    config = Config("OP#12 ADR-0001: 3-level redeclared chain compatible").base_url(
+        get_gts_base_url()
+    )
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            "gts://gts.x.test12.red3lvl.user.v1~",
+            {
+                "type": "object",
+                "required": ["userId", "name"],
+                "properties": {
+                    "userId": {"type": "string"},
+                    "name": {"type": "string", "maxLength": 100},
+                },
+            },
+            "register root A (maxLength 100)",
+        ),
+        _register_derived_redeclared(
+            "gts://gts.x.test12.red3lvl.user.v1~x.test12._.mid.v1~",
+            "gts://gts.x.test12.red3lvl.user.v1~",
+            {
+                "type": "object",
+                "required": ["userId", "name"],
+                "properties": {
+                    "userId": {"type": "string"},
+                    "name": {"type": "string", "maxLength": 80},
+                },
+            },
+            "register mid B without allOf (maxLength 80)",
+        ),
+        _register_derived_redeclared(
+            (
+                "gts://gts.x.test12.red3lvl.user.v1~"
+                "x.test12._.mid.v1~x.test12._.leaf.v1~"
+            ),
+            "gts://gts.x.test12.red3lvl.user.v1~x.test12._.mid.v1~",
+            {
+                "type": "object",
+                "required": ["userId", "name"],
+                "properties": {
+                    "userId": {"type": "string"},
+                    "name": {"type": "string", "maxLength": 50},
+                },
+            },
+            "register leaf C without allOf (maxLength 50)",
+        ),
+        _validate_type_schema(
+            (
+                "gts.x.test12.red3lvl.user.v1~"
+                "x.test12._.mid.v1~x.test12._.leaf.v1~"
+            ),
+            True,
+            "validate 3-level redeclared leaf - transitively compatible",
         ),
     ]
 

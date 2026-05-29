@@ -10,9 +10,9 @@ from httprunner import Step, RunRequest
 def register(gts_id, schema_body, label="register schema"):
     """Register a schema via POST /entities."""
     body = {
+        **schema_body,
         "$$id": gts_id,
         "$$schema": "http://json-schema.org/draft-07/schema#",
-        **schema_body,
     }
     return Step(
         RunRequest(label)
@@ -28,7 +28,23 @@ def register_derived(gts_id, base_ref, overlay, label="register derived", top_le
 
     top_level: optional dict of extra keys to add at schema top level
     (e.g. {"x-gts-final": True}) — these MUST NOT go inside allOf.
+
+    The document-level GTS keywords x-gts-traits / x-gts-traits-schema MUST
+    appear at the schema top level, not nested inside an allOf entry
+    (GTS spec §9.12). If a caller places them in the `overlay`, they are
+    transparently hoisted to the top level so existing trait tests express
+    the spec-correct placement without restating every call site.
     """
+    overlay = dict(overlay)
+    trait_kws = ("x-gts-traits", "x-gts-traits-schema")
+    hoisted = {kw: overlay.pop(kw) for kw in trait_kws if kw in overlay}
+    if top_level:
+        clobbered = [kw for kw in trait_kws if kw in top_level]
+        if clobbered:
+            raise ValueError(
+                "top_level must not contain trait keywords "
+                f"{clobbered}; pass them in `overlay` so they are hoisted"
+            )
     body = {
         "$$id": gts_id,
         "$$schema": "http://json-schema.org/draft-07/schema#",
@@ -38,8 +54,61 @@ def register_derived(gts_id, base_ref, overlay, label="register derived", top_le
             overlay,
         ],
     }
+    body.update(hoisted)
     if top_level:
         body.update(top_level)
+    return Step(
+        RunRequest(label)
+        .post("/entities")
+        .with_json(body)
+        .validate()
+        .assert_equal("status_code", 200)
+    )
+
+
+def register_derived_redeclared(
+    gts_id, base_ref, body, label="register derived (no allOf)", top_level=None
+):
+    """Register a derived schema without allOf — caller restates parent fields directly.
+
+    Per ADR-0001 (GTS as a JSON Schema extension, dialect-agnostic; not a formal
+    JSON Schema Dialect), derivation is established by the chained $id alone;
+    the body MAY use any syntactically valid JSON Schema form.
+    `base_ref` is accepted for parity with register_derived() and documents intent.
+
+    `body` is the entire schema body (caller is responsible for restating any
+    parent fields that need to participate in OP#12 compatibility). The helper
+    only injects $id and $schema; no allOf wrapping is added.
+    top_level: optional dict merged into body at the top level.
+    """
+    full = {
+        **body,
+        "$$id": gts_id,
+        "$$schema": "http://json-schema.org/draft-07/schema#",
+    }
+    if top_level:
+        full.update(top_level)
+    return Step(
+        RunRequest(label)
+        .post("/entities")
+        .with_json(full)
+        .validate()
+        .assert_equal("status_code", 200)
+    )
+
+
+def register_abstract(gts_id, schema_body, label="register abstract"):
+    """Register a schema marked x-gts-abstract: true.
+
+    Per ADR-0003, abstract types skip the trait-completeness check at
+    /validate-type-schema time.
+    """
+    body = {
+        **schema_body,
+        "$$id": gts_id,
+        "$$schema": "http://json-schema.org/draft-07/schema#",
+        "x-gts-abstract": True,
+    }
     return Step(
         RunRequest(label)
         .post("/entities")
