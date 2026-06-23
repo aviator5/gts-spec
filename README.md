@@ -1501,9 +1501,9 @@ Traits MUST follow standard JSON Schema practices. The key rule is that **the re
 Given an inheritance chain `S₀ → S₁ → … → Sₙ`:
 
 - **Trait schema merge**
-  - The registry MUST build an *effective trait schema* by composing all encountered `x-gts-traits-schema` values using JSON Schema `allOf`.
-  - Any `$ref` appearing inside `x-gts-traits-schema` MUST be resolved using standard JSON Schema `$ref` resolution rules (base URI resolution + JSON Pointer fragments).
-  - Derived schemas MAY further constrain (narrow) traits by adding additional schema constraints in their `x-gts-traits-schema` (this is naturally enforced by `allOf`).
+  - The registry MUST build an *effective trait schema* by composing all `x-gts-traits-schema` values along the **`$id` chain** using JSON Schema `allOf`. Aggregation follows `$id` regardless of how the host body expresses derivation — including bodies with no `allOf` (ADR-0001 Variant 2c).
+  - Any `$ref` inside `x-gts-traits-schema` MUST be resolved by standard JSON Schema rules (base URI + JSON Pointer fragments). A fragment ref (e.g. `#/$defs/Foo`) resolves against the host type schema the keyword appears in, not against the extracted trait subschema in isolation.
+  - Derived schemas MAY further constrain (narrow) traits by adding constraints in their `x-gts-traits-schema` (naturally enforced by `allOf`).
 
 - **Trait value merge**
   - The registry MUST build an *effective traits object* by walking the type's `$id` chain root → leaf and applying each layer's `x-gts-traits` as a [JSON Merge Patch (RFC 7396)](https://datatracker.ietf.org/doc/html/rfc7396) against the chain-merged object so far. Top-level scalar / array / `null` leaves are overwritten by the descendant (last-wins). Object-valued top-level traits merge **recursively** — fields of an ancestor's object trait that the descendant does not restate are preserved.
