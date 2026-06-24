@@ -3,6 +3,7 @@ from .helpers.http_run_helpers import (
     register as _register,
     register_derived as _register_derived,
     register_abstract as _register_abstract,
+    register_instance as _register_instance,
     validate_entity as _validate_entity,
     validate_type_schema as _validate_type_schema,
 )
@@ -1857,10 +1858,28 @@ class TestCaseOp13_TraitsInvalid_TraitsInInstance(HttpRunner):
             True,
             "validate derived schema - ok",
         ),
+        _register_instance(
+            {
+                "id": (
+                    "gts.x.test13.tinst.event.v1~"
+                    "x.test13._.tinst_leaf.v1~"
+                    "x.test13._.bad_instance.v1"
+                ),
+                "type": (
+                    "gts.x.test13.tinst.event.v1~"
+                    "x.test13._.tinst_leaf.v1~"
+                ),
+                "x-gts-traits": {
+                    "retention": "P90D",
+                },
+            },
+            "register instance carrying schema-only x-gts-traits",
+        ),
         _validate_entity(
             (
                 "gts.x.test13.tinst.event.v1~"
                 "x.test13._.tinst_leaf.v1~"
+                "x.test13._.bad_instance.v1"
             ),
             False,
             "validate entity should fail - traits in instance",
@@ -1902,8 +1921,24 @@ class TestCaseOp13_TraitsInvalid_TraitsSchemaInInstance(HttpRunner):
             },
             "register base schema with traits-schema",
         ),
+        _register_instance(
+            {
+                "id": (
+                    "gts.x.test13.tsinst.event.v1~"
+                    "x.test13._.bad_instance.v1"
+                ),
+                "type": "gts.x.test13.tsinst.event.v1~",
+                "x-gts-traits-schema": {
+                    "type": "object",
+                    "properties": {
+                        "retention": {"type": "string"},
+                    },
+                },
+            },
+            "register instance carrying schema-only x-gts-traits-schema",
+        ),
         _validate_entity(
-            "gts.x.test13.tsinst.event.v1~",
+            "gts.x.test13.tsinst.event.v1~x.test13._.bad_instance.v1",
             False,
             "validate entity should fail - traits-schema in instance",
         ),
@@ -4211,4 +4246,3 @@ class TestCaseOp13_Merge_DeleteThenReadd_AcrossLayers(HttpRunner):
             "validate leaf - retention re-added after mid deleted it",
         ),
     ]
-
