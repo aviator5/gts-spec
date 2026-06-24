@@ -1403,6 +1403,65 @@ class TestCaseOp13_TraitsInvalid_APBlocksExtension(HttpRunner):
     ]
 
 
+class TestCaseOp13_TraitsInvalid_AbstractAPBlocksSchemaExtensionNoValues(HttpRunner):
+    """OP#13 - Traits: abstract descendant cannot extend a closed trait schema.
+
+    The failure must be based on descendant trait-schema compatibility, not on
+    validating provided x-gts-traits values: this abstract descendant provides
+    no trait values and skips completeness, but its new topicRef property is
+    still rejected by the ancestor's additionalProperties:false branch.
+    """
+
+    config = Config(
+        "OP#13 - Abstract traits schema extension blocked by AP false"
+    ).base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_abstract(
+            "gts://gts.x.test13.apabs.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "retention": {"type": "string"},
+                    },
+                },
+                "required": ["id"],
+                "properties": {"id": {"type": "string"}},
+            },
+            "register abstract base with closed traits-schema",
+        ),
+        _register_derived(
+            "gts://gts.x.test13.apabs.event.v1~x.test13._.ap_child.v1~",
+            "gts://gts.x.test13.apabs.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": {
+                    "type": "object",
+                    "properties": {
+                        "topicRef": {
+                            "type": "string",
+                            "x-gts-ref": "gts.x.core.events.topic.v1~",
+                        },
+                    },
+                },
+            },
+            "register abstract child extending closed trait schema",
+            top_level={"x-gts-abstract": True},
+        ),
+        _validate_type_schema(
+            "gts.x.test13.apabs.event.v1~x.test13._.ap_child.v1~",
+            False,
+            "validate should fail - abstract child trait schema is incompatible",
+        ),
+    ]
+
+
 class TestCaseOp13_TraitsInvalid_DerivedHasTraitsButNoTraitSchema(HttpRunner):
     """OP#13 - Traits: derived provides x-gts-traits.
 
@@ -2160,6 +2219,326 @@ class TestCaseOp13_TraitsSchema_IncompatibleDescendantSchema_Fails(HttpRunner):
             "gts.x.test13.aggincomp.event.v1~x.test13._.kid.v1~",
             False,
             "validate derived - aggregated allOf is unsatisfiable",
+        ),
+    ]
+
+
+class TestCaseOp13_TraitsSchema_AbstractIncompatibleNoValues_Fails(HttpRunner):
+    """ADR-0002: abstract descendant trait-schema must still narrow ancestor.
+
+    The abstract child provides no x-gts-traits values, so ordinary value
+    validation has nothing concrete to reject. Validation must still fail
+    because retention changes from string to integer in the descendant
+    x-gts-traits-schema, which is not a narrowing of the ancestor trait.
+    """
+
+    config = Config(
+        "OP#13 ADR-0002: abstract incompatible trait-schema without values"
+    ).base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_abstract(
+            "gts://gts.x.test13.abstincomp.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": {
+                    "type": "object",
+                    "properties": {
+                        "retention": {"type": "string"},
+                    },
+                },
+                "required": ["id"],
+                "properties": {"id": {"type": "string"}},
+            },
+            "register abstract base with retention string trait",
+        ),
+        _register_derived(
+            (
+                "gts://gts.x.test13.abstincomp.event.v1~"
+                "x.test13._.child.v1~"
+            ),
+            "gts://gts.x.test13.abstincomp.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": {
+                    "type": "object",
+                    "properties": {
+                        "retention": {"type": "integer"},
+                    },
+                },
+            },
+            "register abstract child changing retention trait type",
+            top_level={"x-gts-abstract": True},
+        ),
+        _validate_type_schema(
+            "gts.x.test13.abstincomp.event.v1~x.test13._.child.v1~",
+            False,
+            "validate should fail - abstract child trait schema changes type",
+        ),
+    ]
+
+
+class TestCaseOp13_TraitsSchema_AbstractClosedDescendantOrphansAncestor_Fails(
+    HttpRunner
+):
+    """ADR-0002: a closed descendant trait-schema must not orphan an ancestor trait.
+
+    The effective trait-schema composes ancestor and descendant contributions as
+    sibling allOf branches, and additionalProperties is scoped to its own branch.
+    The abstract child sets additionalProperties:false but does not restate the
+    ancestor's retention trait, so retention becomes unusable (any value for it
+    is rejected by the child branch). The child provides no values, so this is
+    caught by descendant trait-schema compatibility, not value validation.
+    """
+
+    config = Config(
+        "OP#13 ADR-0002: closed descendant orphans ancestor trait"
+    ).base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_abstract(
+            "gts://gts.x.test13.abstorphan.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": {
+                    "type": "object",
+                    "properties": {
+                        "retention": {"type": "string"},
+                    },
+                },
+                "required": ["id"],
+                "properties": {"id": {"type": "string"}},
+            },
+            "register abstract base with retention string trait",
+        ),
+        _register_derived(
+            (
+                "gts://gts.x.test13.abstorphan.event.v1~"
+                "x.test13._.child.v1~"
+            ),
+            "gts://gts.x.test13.abstorphan.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "topicRef": {"type": "string"},
+                    },
+                },
+            },
+            "register abstract child closing surface without restating retention",
+            top_level={"x-gts-abstract": True},
+        ),
+        _validate_type_schema(
+            "gts.x.test13.abstorphan.event.v1~x.test13._.child.v1~",
+            False,
+            "validate should fail - closed child orphans ancestor retention trait",
+        ),
+    ]
+
+
+class TestCaseOp13_TraitsSchema_AbstractNestedClosedDescendantOrphansAncestor_Fails(
+    HttpRunner
+):
+    """ADR-0002: closed nested descendant trait-schema must not orphan ancestors.
+
+    The child keeps the top-level routing trait but closes the nested routing
+    object without restating the ancestor's routing.source field. Under allOf,
+    any routing.source value is rejected by the child branch, so validation
+    must fail even though the abstract child provides no trait values.
+    """
+
+    config = Config(
+        "OP#13 ADR-0002: closed nested descendant orphans ancestor trait"
+    ).base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_abstract(
+            "gts://gts.x.test13.abstnestedorphan.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": {
+                    "type": "object",
+                    "properties": {
+                        "routing": {
+                            "type": "object",
+                            "properties": {
+                                "source": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+                "required": ["id"],
+                "properties": {"id": {"type": "string"}},
+            },
+            "register abstract base with nested routing.source trait",
+        ),
+        _register_derived(
+            (
+                "gts://gts.x.test13.abstnestedorphan.event.v1~"
+                "x.test13._.child.v1~"
+            ),
+            "gts://gts.x.test13.abstnestedorphan.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": {
+                    "type": "object",
+                    "properties": {
+                        "routing": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "target": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+            },
+            "register abstract child closing routing without source",
+            top_level={"x-gts-abstract": True},
+        ),
+        _validate_type_schema(
+            "gts.x.test13.abstnestedorphan.event.v1~x.test13._.child.v1~",
+            False,
+            "validate should fail - closed nested child orphans routing.source",
+        ),
+    ]
+
+
+class TestCaseOp13_TraitsSchema_AbstractNestedClosedDescendantRestatesAncestor_Ok(
+    HttpRunner
+):
+    """ADR-0002: closed nested descendant may restate ancestor nested traits."""
+
+    config = Config(
+        "OP#13 ADR-0002: closed nested descendant restates ancestor trait"
+    ).base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_abstract(
+            "gts://gts.x.test13.abstnestedrestate.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": {
+                    "type": "object",
+                    "properties": {
+                        "routing": {
+                            "type": "object",
+                            "properties": {
+                                "source": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+                "required": ["id"],
+                "properties": {"id": {"type": "string"}},
+            },
+            "register abstract base with nested routing.source trait",
+        ),
+        _register_derived(
+            (
+                "gts://gts.x.test13.abstnestedrestate.event.v1~"
+                "x.test13._.child.v1~"
+            ),
+            "gts://gts.x.test13.abstnestedrestate.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": {
+                    "type": "object",
+                    "properties": {
+                        "routing": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "source": {"type": "string"},
+                                "target": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+            },
+            "register abstract child closing routing and restating source",
+            top_level={"x-gts-abstract": True},
+        ),
+        _validate_type_schema(
+            "gts.x.test13.abstnestedrestate.event.v1~x.test13._.child.v1~",
+            True,
+            "validate should pass - closed nested child restates routing.source",
+        ),
+    ]
+
+
+class TestCaseOp13_TraitsSchema_AbstractValidNarrowingNoValues_Ok(HttpRunner):
+    """ADR-0002: a valid narrowing descendant trait-schema must pass.
+
+    Positive guard against over-rejection: the abstract child narrows the
+    ancestor priority trait (open string -> enum subset) and adds an optional
+    trait under an open ancestor, providing no values. Descendant trait-schema
+    compatibility must accept this.
+    """
+
+    config = Config(
+        "OP#13 ADR-0002: abstract valid narrowing trait-schema without values"
+    ).base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register_abstract(
+            "gts://gts.x.test13.abstnarrow.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": {
+                    "type": "object",
+                    "properties": {
+                        "priority": {"type": "string"},
+                    },
+                },
+                "required": ["id"],
+                "properties": {"id": {"type": "string"}},
+            },
+            "register abstract base with open priority trait",
+        ),
+        _register_derived(
+            (
+                "gts://gts.x.test13.abstnarrow.event.v1~"
+                "x.test13._.child.v1~"
+            ),
+            "gts://gts.x.test13.abstnarrow.event.v1~",
+            {
+                "type": "object",
+                "x-gts-traits-schema": {
+                    "type": "object",
+                    "properties": {
+                        "priority": {
+                            "type": "string",
+                            "enum": ["low", "high"],
+                        },
+                        "note": {"type": "string"},
+                    },
+                },
+            },
+            "register abstract child narrowing priority and adding optional note",
+            top_level={"x-gts-abstract": True},
+        ),
+        _validate_type_schema(
+            "gts.x.test13.abstnarrow.event.v1~x.test13._.child.v1~",
+            True,
+            "validate should pass - child narrows priority and adds optional trait",
         ),
     ]
 
