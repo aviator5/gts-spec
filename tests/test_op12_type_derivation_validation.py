@@ -494,6 +494,66 @@ class TestCaseTestOp12TypeDerivationValidation_NestedAdditionalPropertiesFalse(
     ]
 
 
+class TestCaseTestOp12_NestedClosedDescendantOrphansAncestorProperty(
+    HttpRunner
+):
+    """OP#12 - Descendant nested AP:false must not orphan ancestor properties.
+
+    Base declares routing.source. The derived overlay keeps the top-level
+    routing object but closes that nested object while declaring only
+    routing.target. Under allOf, any routing.source value is rejected by the
+    derived branch, so the derived schema makes an ancestor property unusable
+    and must fail type-schema validation.
+    """
+
+    config = Config(
+        "OP#12 - nested closed descendant orphans ancestor property"
+    ).base_url(get_gts_base_url())
+
+    def test_start(self):
+        super().test_start()
+
+    teststeps = [
+        _register(
+            "gts://gts.x.test12.nested.orphan.v1~",
+            {
+                "type": "object",
+                "properties": {
+                    "routing": {
+                        "type": "object",
+                        "properties": {
+                            "source": {"type": "string"},
+                        },
+                    },
+                },
+            },
+            "register base with nested routing.source property",
+        ),
+        _register_derived(
+            "gts://gts.x.test12.nested.orphan.v1~x.test12._.child.v1~",
+            "gts://gts.x.test12.nested.orphan.v1~",
+            {
+                "type": "object",
+                "properties": {
+                    "routing": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "target": {"type": "string"},
+                        },
+                    },
+                },
+            },
+            "register derived closing routing without restating source",
+        ),
+        _validate_type_schema(
+            "gts.x.test12.nested.orphan.v1~x.test12._.child.v1~",
+            False,
+            "validate should fail - closed nested branch orphans routing.source",
+        ),
+    ]
+
+
 class TestCaseTestOp12TypeDerivationValidation_InvalidDerivedSchema(
     HttpRunner
 ):

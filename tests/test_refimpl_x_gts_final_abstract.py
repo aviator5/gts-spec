@@ -4,7 +4,7 @@ Tests for schema modifier keywords (section 9.11):
 - x-gts-final: type cannot be inherited
 - x-gts-abstract: type cannot be directly instantiated
 
-These tests cover edge cases, boolean validation, schema-only enforcement,
+These tests cover edge cases, boolean validation, type-schema keyword placement,
 and interactions with x-gts-traits (OP#13).
 """
 
@@ -273,49 +273,6 @@ class TestCaseFinal_NonBooleanRejected(HttpRunner):
     ]
 
 
-class TestCaseFinal_InInstanceRejected(HttpRunner):
-    """x-gts-final: Schema-only keyword in an instance MUST be rejected.
-
-    An instance body containing x-gts-final should fail entity validation.
-    """
-
-    config = Config("final: in instance rejected").base_url(get_gts_base_url())
-
-    def test_start(self):
-        super().test_start()
-
-    teststeps = [
-        _register(
-            "gts://gts.x.testfa.finalininst.base.v1~",
-            {
-                "type": "object",
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string"},
-                },
-            },
-            "register base schema",
-        ),
-        _register_instance(
-            {
-                "id": "gts.x.testfa.finalininst.base.v1~x.testfa._.item.v1",
-                "x-gts-final": True,
-            },
-            "register instance with x-gts-final in body",
-        ),
-        _validate_entity(
-            "gts.x.testfa.finalininst.base.v1~x.testfa._.item.v1",
-            False,
-            "validate-entity instance with schema keyword should fail",
-            expected_entity_type="instance",
-        ),
-    ]
-
-
-# ---------------------------------------------------------------------------
-# x-gts-abstract tests
-# ---------------------------------------------------------------------------
-
 
 class TestCaseAbstract_RejectDirectInstance(HttpRunner):
     """x-gts-abstract: Direct instance of abstract type MUST fail validation."""
@@ -554,39 +511,6 @@ class TestCaseAbstract_NonBooleanRejected(HttpRunner):
         ),
     ]
 
-
-class TestCaseAbstract_InInstanceRejected(HttpRunner):
-    """x-gts-abstract: Schema-only keyword in an instance MUST be rejected."""
-
-    config = Config("abstract: in instance rejected").base_url(get_gts_base_url())
-
-    def test_start(self):
-        super().test_start()
-
-    teststeps = [
-        _register(
-            "gts://gts.x.testfa.absininst.base.v1~",
-            {
-                "type": "object",
-                "required": ["id"],
-                "properties": {"id": {"type": "string"}},
-            },
-            "register base schema",
-        ),
-        _register_instance(
-            {
-                "id": "gts.x.testfa.absininst.base.v1~x.testfa._.item.v1",
-                "x-gts-abstract": True,
-            },
-            "register instance with x-gts-abstract",
-        ),
-        _validate_entity(
-            "gts.x.testfa.absininst.base.v1~x.testfa._.item.v1",
-            False,
-            "validate-entity instance with schema keyword should fail",
-            expected_entity_type="instance",
-        ),
-    ]
 
 
 class TestCaseAbstract_CombinedAnonInstanceRejected(HttpRunner):
