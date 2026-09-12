@@ -84,7 +84,7 @@ See the [Practical Benefits for Service and Platform Vendors](#51-practical-bene
   - [9.3 GTS entities registration](#93---gts-entities-registration)
   - [9.4 CLI support](#94---cli-support)
   - [9.5 Web server with OpenAPI](#95---web-server-with-openapi)
-  - [9.6 `x-gts-ref` support](#96---x-gts-ref-support)
+  - [9.6 GTS Reference Keywords (`x-gts-type-ref` / `x-gts-instance-ref`)](#96---gts-reference-keywords-x-gts-type-ref--x-gts-instance-ref)
   - [9.7 GTS Type Schema Traits (`x-gts-traits-schema` / `x-gts-traits`)](#97---gts-type-schema-traits-x-gts-traits-schema--x-gts-traits)
   - [9.8 YAML support](#98---yaml-support)
   - [9.9 TypeSpec support](#99---typespec-support)
@@ -116,6 +116,7 @@ See the [Practical Benefits for Service and Platform Vendors](#51-practical-bene
 | 0.11 | Introduce term **GTS Type Schema** as the canonical definition of a GTS Type; remove the standalone `Schema` term from Terminology; rewrite `GTS Type` entry to name the abstract registered entity; rename `GTS Type Registry` → `GTS Registry` (registry now scopes both Type Schemas and well-known Instances). **Conformance tests for reference implementations** also updated: rename API endpoints `/validate-type` → `/validate-type-schema` and `/types` → `/type-schemas`; rename OpenAPI components `TypeRegister` → `TypeSchemaRegister`, `ValidateTypeRequest` → `ValidateTypeSchemaRequest`; rename request field `TypeSchemaRegister.schema` → `TypeSchemaRegister.type_schema`; rename helper `validate_type` → `validate_type_schema`. |
 | 0.12 | BREAKING: reframe GTS Type Schemas as a dialect-agnostic JSON Schema extension; the prior `$defs MUST NOT` and post-Draft-07-keyword restrictions are dropped; derivation compatibility and the finality guard use the chained `$id` alone, `allOf`+`$ref` recommended but not required (ADR-0001). `x-gts-traits-schema` becomes a JSON Schema subschema (object/`true`/`false`); the registry chain-aggregates declarations along the `$id` chain via `allOf` (ADR-0002). Trait completeness is keyed on `x-gts-abstract` and enforced on non-abstract types against the materialized effective traits object (ADR-0003). Trait-value merge follows JSON Merge Patch (RFC 7396); cross-descendant locking moves to standard JSON Schema `const` in `x-gts-traits-schema` (ADR-0004). The four document-level keywords (`x-gts-final`, `x-gts-abstract`, `x-gts-traits-schema`, `x-gts-traits`) MUST appear at the schema top level and are rejected (fail fast) when nested in a subschema (§9.7.1, §9.11). |
 | 0.13 | CORRECTION: Define compatibility through accepted-instance-set inclusion (§4.3) and separate **Type Derivation Compatibility** (§4.1, one-way) from **Type Schema Evolution Compatibility** (§4.2). This corrects OP#8 verdicts for unchanged inputs — notably for open content models, enums, and `const` identifier fields; implementations targeting 0.12 may need to update their compatibility checker. OP#8 reports the tri-state `compatible`, `incompatible`, or `unknown` for each relation, preserving an inconclusive check instead of conflating it with incompatibility. Tolerant-reader, casting, and default-materialization guarantees MUST be reported separately (§4.3). Content models are classified on the resolved effective schema, not on `additionalProperties` alone (§4.4). §4 restructured and renumbered; later sections unchanged. OP#8 conformance tests updated. |
+| 0.14 | BREAKING: replace the kind-blind `x-gts-ref` with the kind-selecting pair `x-gts-type-ref` and `x-gts-instance-ref`; both stay rooted at their operand and add a kind check on the candidate (§9.6.3). The keywords are **assertions** composing through the declared dialect's applicators, so `anyOf` expresses deliberate dual acceptance. Operand grammar is fixed to three forms with explicit precedence — the reserved dynamic token `/$id` (resolves to the leaf Type Schema selected for the validation operation, giving dynamic rebinding through an authored `$ref`/`allOf`), a lexical JSON Pointer resolved against the authoring schema resource and required to yield a terminal literal string, and a `gts.…` literal (§9.6.2). Dropped from the operand language: the `./…` spelling, `/gts.…` as a literal, and operand indirection through another annotated subschema; `/$id` is rooted resolution, not equality. MINOR-version and wildcard matching are specified in §9.6.3 rather than delegated. `x-gts-ref` is removed and MUST be rejected, not ignored. §11.0 corrected to separate the four document-level keywords from the field-level reference keywords. Migration is by field intent — see [`adr/0005-x-gts-ref-kind-split.md`](adr/0005-x-gts-ref-kind-split.md); examples and conformance tests migrate under the same version. |
 
 ## Terminology
 
@@ -1412,7 +1413,7 @@ Implement and expose all operations OP#1–OP#13 listed above and add appropriat
 
 ### 9.3 - GTS entities registration
 
-Implement simple GTS instances in-memory registry with optional GTS entities validation on registration. If "validation" parameter enabled, the entity registration action must ensure that all the GTS references are valid - identitfiers must match GTS pattern, refererred entities must be registered, the x-gts-ref references must be valid (see below)
+Implement simple GTS instances in-memory registry with optional GTS entities validation on registration. If "validation" parameter enabled, the entity registration action must ensure that all the GTS references are valid - identitfiers must match GTS pattern, refererred entities must be registered, the GTS reference keywords `x-gts-type-ref` / `x-gts-instance-ref` must be valid (see §9.6). Referent existence is this registration policy; the keywords themselves match syntactically and need no registry (§9.6.6)
 
 ### 9.4 - CLI support
 
@@ -1428,22 +1429,169 @@ Implement an HTTP server that conforms to `tests/openapi.json` so it can be test
 pytest ./tests
 ```
 
-### 9.6 - `x-gts-ref` support
+### 9.6 - GTS Reference Keywords (`x-gts-type-ref` / `x-gts-instance-ref`)
 
-Use `x-gts-ref` in GTS schemas (JSON schemas) to declare that a string field is a GTS entity reference, not an arbitrary string; validators must enforce this.
+A **GTS reference keyword** asserts that a JSON string value is a GTS identifier of a specific **kind**, rooted at a specific GTS Type. A **GTS Type Identifier** ends with `~`, a **GTS Instance Identifier** does not (§2.1); there is one keyword per kind.
 
-Allowed values:
-- `"x-gts-ref": "gts.*"` — field must be a valid GTS identifier (see OP#1); optionally resolve against a registry if available.
-- `"x-gts-ref": "/$id"` — relative self-reference; field value must equal the current schema’s `$id` without the `gts://` prefix ("/" refers to the JSON Schema document root, `$id` is its identifier). The referred field must be a GTS string or another `x-gts-ref` field.
+This section is self-contained and normative for reference matching. It reuses the wildcard *syntax* of §10 but defines its own matching semantics.
 
-See examples in `./examples/modules` for typical patterns.
+#### 9.6.1 Keywords
 
-Implementation notes:
+| Keyword | JSON type | Asserts the value is | Typical use |
+|---------|-----------|----------------------|-------------|
+| **`x-gts-type-ref`** | `string` (operand) | a **GTS Type Identifier** rooted at the operand | `type` / `gtsType` discriminators, fields naming a type to resolve |
+| **`x-gts-instance-ref`** | `string` (operand) | a **GTS Instance Identifier** rooted at the operand | enum-like state fields, `topicRef`-style association links, capability and requirement lists, `id` of a well-known instance |
 
-- Treating `x-gts-ref` like JSON Schema string constraints:
-  - When the value is a literal starting with `gts.` (e.g., `gts.x.core.modules.capability.v1~`), it can be enforced similarly to a `startsWith(...)` check by validating the instance value against the provided GTS prefix (sections 8.1/8.2). Implementations must also validate the GTS ID.
-  - When the value is a relative path like `./$id` or `./description`, resolve it as a JSON Pointer relative to the schema root. If the pointer doesn't resolve to a GTS string or another `x-gts-ref` field, an error must be reported.
-  - For nested paths (e.g., `./properties/id`), resolve the pointer accordinly to the field path in the JSON Schema document.
+- **Assertions.** Both keywords are assertions: they are evaluated at the schema location where they appear and produce a boolean result there, composing through the applicators of the dialect declared by `$schema` (`allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else`, `$ref`, `items`, `properties`, …). An implementation MUST NOT enforce every textual occurrence in a document — an occurrence in a branch the dialect does not evaluate for a given instance location contributes nothing.
+- **Placement.** Unlike the four document-level keywords of §9.7 and §9.11, these are **field-level** and MAY appear at any schema location (§11.0).
+- **Non-string values.** The assertion means "a string containing a matching GTS identifier", so a value that is not a JSON string **fails** it. A sibling `"type": "string"` is good practice but is not required.
+- **Mutual exclusion.** A single schema location MUST NOT carry both keywords: no candidate satisfies both, so the combination MUST be rejected as an invalid schema. To accept either kind, use `anyOf` (§9.6.5).
+- **Instance documents.** Both keywords have GTS meaning only in JSON Schema documents (documents with `$schema`). Elsewhere, fields with these names are ordinary data.
+
+```json
+{
+  "$id": "gts://gts.x.infra.compute.vm.v1~",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "type":       { "type": "string", "x-gts-type-ref": "/$id" },
+    "powerState": { "type": "string", "x-gts-instance-ref": "gts.x.infra.compute.vm_state.v1~" }
+  }
+}
+```
+
+`type` holds a Type Identifier such as `gts.x.infra.compute.vm.v1~vmware.esxi._.vm.v1~`; `powerState` holds an Instance Identifier such as `gts.x.infra.compute.vm_state.v1~x.infra._.running.v1`.
+
+#### 9.6.2 Operands
+
+The keyword value is an **operand** denoting the GTS Type root (or set of type roots) the reference is rooted at. Exactly three forms exist, distinguished by this **parsing precedence**:
+
+| # | Form | Recognized when the value | Resolves to |
+|---|------|---------------------------|-------------|
+| 1 | **Reserved dynamic token** | is exactly `/$id` | the `$id` of the **leaf GTS Type Schema selected for the validation operation**, with the `gts://` prefix removed (§9.6.4) |
+| 2 | **JSON Pointer** | begins with `/` but is not exactly `/$id` | the JSON **string value** found at that pointer |
+| 3 | **Literal** | begins with `gts.` | itself, optionally containing a wildcard (§9.6.3) |
+
+Any other value is an invalid operand. `/$id/foo` is an ordinary form-2 pointer, not malformed reserved syntax.
+
+**Form 2** resolves per [RFC 6901](https://datatracker.ietf.org/doc/html/rfc6901) against the root of the **schema resource in which the keyword was authored**. Resource boundaries follow the dialect declared by `$schema`, including embedded resources established by a nested `$id`; the resource is not necessarily the physical file. Pointer resolution is therefore **lexical and static** — it never depends on which leaf type is being validated. Form 1 is the only dynamic form; to root a constraint statically at the authoring type, write the literal.
+
+The pointer MUST resolve to a JSON **string**. That string, with any `gts://` prefix removed, **is** the operand, and it is **terminal**: it MUST itself be a literal GTS type root or wildcard pattern (form 3), and it is **not** reinterpreted as a pointer or as the reserved token. A pointer that resolves to the string `/properties/b`, to a non-string, or to nothing at all is an invalid operand.
+
+```json
+{
+  "$id": "gts://gts.x.testref._.pointer.v1~",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "some": { "type": "string", "const": "gts.x.testref._.target.v1~" },
+    "id":   { "type": "string", "x-gts-instance-ref": "/properties/some/const" }
+  }
+}
+```
+
+**Resolved operand.** However it is obtained, the resolved operand MUST be able to denote at least one GTS Type Identifier: a **wildcard-free** operand MUST itself be a canonical GTS Type Identifier, and a **wildcard** operand is valid when its matched set can contain a Type Identifier. A pattern such as `gts.x.core.events.topic.v1~x.core._.default.v*` is therefore valid — it denotes the Type Identifiers it matches, and the non-Type strings it also matches are irrelevant. An operand that resolves to an Instance Identifier, to a pattern whose Type-Identifier subset is necessarily empty, or to a value that is not a valid GTS identifier or pattern makes the schema invalid (§9.6.6).
+
+#### 9.6.3 Matching
+
+A candidate value is validated in two stages.
+
+**Stage 1 — rooted match.** The candidate MUST be a syntactically valid GTS identifier under the **chained** grammar — §2.1 and the EBNF of §2.3 govern — whose parsed type chain begins with the resolved operand.
+
+- A **literal** operand denotes one canonical GTS Type Identifier; the candidate matches when its parsed type chain begins with that identifier **at a chain boundary**.
+- A **wildcard** operand denotes the **subset of canonical GTS Type Identifiers** it matches; the candidate matches when its type chain begins with at least one member. Implementations need not enumerate the subset — comparing the candidate's type-chain prefix against the pattern is sufficient. A trailing chain wildcard on a type root (`gts.a.b._.c.v1~*`) is valid but redundant: rooted matching already admits descendants.
+- Matching MUST operate on the parsed chain, never on raw lexical `startsWith`.
+
+**MINOR versions.** An operand segment carrying no MINOR is rooted at any MINOR of that MAJOR; an operand carrying a MINOR is rooted at that MINOR only:
+
+| Operand | Candidate rooted at | Matches |
+|---|---|---|
+| `gts.a.b._.c.v1~` | `gts.a.b._.c.v1~` | ✅ |
+| `gts.a.b._.c.v1~` | `gts.a.b._.c.v1.0~`, `gts.a.b._.c.v1.1~` | ✅ |
+| `gts.a.b._.c.v1.0~` | `gts.a.b._.c.v1.0~` | ✅ |
+| `gts.a.b._.c.v1.0~` | `gts.a.b._.c.v1.1~` | ❌ |
+| `gts.a.b._.c.v1~` | `gts.a.b._.c.v2.0~` | ❌ |
+
+This is a **matching** relation only. It does not make `gts.a.b._.c.v1~` and `gts.a.b._.c.v1.1~` the same registered type identity; §4.2 governs that and is unaffected.
+
+**Stage 2 — kind check.** The candidate's kind MUST equal the kind the keyword selects, read off the parsed canonical identifier: a Type Identifier ends with `~`, an Instance Identifier does not. No registry lookup is involved.
+
+For a resolved operand `gts.a.b._.c.v1~`:
+
+| Candidate | `x-gts-type-ref` | `x-gts-instance-ref` |
+|---|---|---|
+| `gts.a.b._.c.v1~` — the operand type itself | accepted | rejected |
+| `gts.a.b._.c.v1~d.e._.f.v1~` — a derived type | accepted | rejected |
+| `gts.a.b._.c.v1~x.y._.z.v1` — a well-known instance | rejected | accepted |
+| `gts.a.b._.c.v1~d.e._.f.v1~x.y._.z.v1` — an instance of a derived type | rejected | accepted |
+| `gts.a.b._.c.v1~7a1d2f34-5678-49ab-9012-abcdef123456` — a combined anonymous instance (§3.7) | rejected | accepted |
+| `gts.a.b._.c.v1~d.e._.f.v1~7a1d2f34-5678-49ab-9012-abcdef123456` — a combined anonymous instance of a derived type | rejected | accepted |
+| `gts.other.b._.c.v1~` — a Type Identifier not rooted at the operand | rejected | rejected |
+| `gts.other.b._.c.v1~x.y._.z.v1` — an Instance Identifier not rooted at the operand | rejected | rejected |
+| `gts.a.b._.c.v1` — unchained, no trailing `~` | rejected | rejected |
+
+The last row follows from §2.1 and §2.3: every Instance Identifier carries a left-hand type segment, and the EBNF admits only the three chain suffixes, all of which require at least one `~`. An unchained non-`~` identifier is therefore not a GTS identifier at all.
+
+With the wildcard operand `gts.*`, `x-gts-type-ref` accepts any valid GTS Type Identifier and `x-gts-instance-ref` any valid chained GTS Instance Identifier.
+
+#### 9.6.4 The reserved `/$id` operand
+
+`/$id` resolves to the `$id` of the **leaf GTS Type Schema selected for the validation operation** — the type an instance is being validated against, or the type schema being registered or validated — with the `gts://` prefix removed. It is a single string lookup on one identified schema; it traverses nothing.
+
+A constraint reached through an explicitly authored `$ref`/`allOf` therefore **rebinds dynamically** to the leaf type:
+
+```text
+base   gts.a.b._.c.v1~            declares:  x-gts-instance-ref: "/$id"
+leaf   gts.a.b._.c.v1~d.e._.f.v1~     body:  allOf [ $ref gts://gts.a.b._.c.v1~, … ]
+
+validating an instance against the leaf:
+  accepted:   gts.a.b._.c.v1~d.e._.f.v1~x.y._.z.v1
+  accepted:   gts.a.b._.c.v1~d.e._.f.v1~g.h._.i.v1~x.y._.z.v1
+  rejected:   gts.a.b._.c.v1~d.e._.q.v1~x.y._.z.v1     (sibling branch)
+```
+
+This is what the `id` / `type` self-reference pattern needs: the base declares once that the field holds an instance of *itself*, and each leaf automatically tightens that to *this leaf*. A field that must instead stay rooted at the base uses the literal operand `x-gts-instance-ref: "gts.a.b._.c.v1~"`. Choose deliberately: a field listing *other* entities of the same family (module requirements, cross-references) wants the literal, not `/$id`.
+
+**Reachability.** A reference keyword is evaluated only where the dialect evaluates its schema location. The chained `$id` establishes derivation and OP#12 compatibility but does **not** by itself import ancestor schema bodies (see [`adr/0001-derivation-form.md`](adr/0001-derivation-form.md)): a derived Type Schema that neither `$ref`s nor restates its base inherits no reference constraint from it, and there is nothing to rebind.
+
+#### 9.6.5 Accepting either kind, and exact matches
+
+Both keywords are **rooted**, not exact. A field that must hold one specific identifier combines the keyword with standard JSON Schema `const`:
+
+```json
+{ "type": "string", "x-gts-type-ref": "gts.x.core.events.topic.v1~", "const": "gts.x.core.events.topic.v1~x.core._.default.v1~" }
+```
+
+A field that deliberately accepts **either** kind uses standard JSON Schema `anyOf`, one branch per keyword:
+
+```json
+{
+  "anyOf": [
+    { "type": "string", "x-gts-type-ref":     "gts.x.infra.compute.vm_state.v1~" },
+    { "type": "string", "x-gts-instance-ref": "gts.x.infra.compute.vm_state.v1~" }
+  ]
+}
+```
+
+Because the keywords are assertions (§9.6.1), only the branch outcomes matter: `anyOf` succeeds when at least one branch asserts successfully. An implementation that scanned for keyword occurrences instead of evaluating branches would reject every value here.
+
+#### 9.6.6 Enforcement
+
+Enforcement follows the pattern of the other `x-gts-*` keywords (§9.11.5): checks run when validation is enabled on registration, and always on the explicit validation endpoints.
+
+**Schema-level** (`/validate-type-schema`; Type Schema registration with validation enabled). The following make the Type Schema invalid and MUST be rejected (fail fast):
+
+- a keyword value that is not a string, or that matches none of the three operand forms (§9.6.2);
+- a form-2 pointer that does not resolve, resolves to a non-string, or resolves to a string that is not a literal type root or wildcard pattern;
+- a resolved operand that is an Instance Identifier, a pattern whose Type-Identifier subset is necessarily empty, or not a valid GTS identifier or pattern;
+- both reference keywords at the same schema location (§9.6.1).
+
+**Instance-level** (`/validate-instance`, `/validate-entity`; instance registration with validation enabled). Each evaluated occurrence asserts per §9.6.3.
+
+Both stages of §9.6.3 are syntactic and require no registry. Whether the referenced entity must also **exist** is registration policy (§9.3); an implementation MAY resolve candidates against a GTS Registry as an additional check, and MUST report a missing referent distinctly from a kind or rooting failure.
+
+Where a Type Schema registered without validation carries an invalid operand, an operation that later evaluates that keyword MUST fail with a **schema-level** error identifying the offending Type Schema and keyword location — not as an instance validation failure, and not as a server error.
+
+See `./examples/modules` and `./examples/typespec/vms` for typical patterns.
 
 
 ### 9.7 - GTS Type Schema Traits (`x-gts-traits-schema` / `x-gts-traits`)
@@ -1508,7 +1656,7 @@ The same derivation compatibility principle that governs host body schemas (§3.
       "topicRef": {
         "description": "GTS ID of the topic/stream where events of this type are published.",
         "type": "string",
-        "x-gts-ref": "gts.x.core.events.topic.v1~",
+        "x-gts-instance-ref": "gts.x.core.events.topic.v1~",
         "default": "gts.x.core.events.topic.v1~x.core._.default.v1"
       },
       "retention": {
@@ -1649,7 +1797,7 @@ See `./examples/events/types/` for complete examples demonstrating trait definit
 ### 9.8 - YAML support
 
 Accept and emit both JSON and YAML (`.json`, `.yaml`, `.yml`) for schemas and instances.
-Ensure conversions are lossless; preserve `$id`, `gtsId`, and custom extensions like `x-gts-ref`.
+Ensure conversions are lossless; preserve `$id`, `gtsId`, and custom extensions like `x-gts-instance-ref`.
 
 ### 9.9 - TypeSpec support
 
@@ -1749,7 +1897,7 @@ When a schema declares `"x-gts-abstract": true`:
 
 #### 9.11.5 Registration enforcement
 
-Enforcement follows the same pattern as existing `?validate=true` behavior: checks are performed when validation is enabled on registration, and always enforced on explicit validation endpoints (`/validate-type-schema`, `/validate-instance`, `/validate-entity`). This is consistent with existing patterns (e.g., `x-gts-ref` checks in section 9.6).
+Enforcement follows the same pattern as existing `?validate=true` behavior: checks are performed when validation is enabled on registration, and always enforced on explicit validation endpoints (`/validate-type-schema`, `/validate-instance`, `/validate-entity`). This is consistent with existing patterns (e.g., the GTS reference keyword checks in section 9.6).
 
 See `./examples/typespec/vms/types/states/gts.x.infra.compute.vm_state.v1~.schema.json` for an example of a final type, `./examples/modules/types/gts.x.core.modules.capability.v1~.schema.json` for another final type, and `./examples/events/types/gts.x.core.events.type.v1~.schema.json` for an example of an abstract base type.
 
@@ -1829,7 +1977,7 @@ Result:    ❌ NO MATCH (different major versions)
 
 ### 11.0 Relationship to JSON Schema
 
-GTS Type Schemas **extend JSON Schema** with a vendor keyword set (`x-gts-*`) and a set of **registry-enforced semantic rules** (see §3.2 derivation, §9.11 modifiers, OP#12 derivation compatibility, OP#13 trait validation). GTS does **not** impose additional syntactic restrictions on the standard JSON Schema body: any syntactically valid JSON Schema body that carries a valid GTS `$id` is a syntactically valid GTS Type Schema. The constraints GTS does enforce on document structure concern only its own `x-gts-*` keywords in GTS Type Schemas — these are type-level annotations that MUST appear at the document top level and are rejected when misplaced (§9.7.1, §9.11). Implementations MUST treat the GTS keywords described in this specification as layered on top of the underlying JSON Schema dialect's semantics, alongside the standard JSON Schema keywords (`$id`, `$ref`, `allOf`, `const`, …) used here.
+GTS Type Schemas **extend JSON Schema** with a vendor keyword set (`x-gts-*`) and a set of **registry-enforced semantic rules** (see §3.2 derivation, §9.11 modifiers, OP#12 derivation compatibility, OP#13 trait validation). GTS does **not** impose additional syntactic restrictions on the standard JSON Schema body: any syntactically valid JSON Schema body that carries a valid GTS `$id` is a syntactically valid GTS Type Schema. The constraints GTS does enforce on document structure concern only its own `x-gts-*` keywords in GTS Type Schemas. Four of them are **document-level**: `x-gts-final`, `x-gts-abstract`, `x-gts-traits-schema`, and `x-gts-traits` MUST appear at the document top level and are rejected when misplaced (§9.7.1, §9.11). The **field-level** reference keywords `x-gts-type-ref` and `x-gts-instance-ref` are assertions on the value at their schema location and MAY appear at any schema location (§9.6.1). Implementations MUST treat the GTS keywords described in this specification as layered on top of the underlying JSON Schema dialect's semantics, alongside the standard JSON Schema keywords (`$id`, `$ref`, `allOf`, `const`, …) used here.
 
 **Dialect-agnostic.** GTS does not pin Type Schemas to a single JSON Schema draft. The dialect of any concrete GTS Type Schema is set by its `$schema` URI, and implementations MUST honour that dialect when validating or interpreting the schema body. The reference examples in this specification declare `$schema: http://json-schema.org/draft-07/schema#` because Draft-07 has the broadest tooling support and is the safest baseline for cross-vendor interoperability; however, Type Schemas that declare a later dialect — Draft 2019-09 (`https://json-schema.org/draft/2019-09/schema`) or Draft 2020-12 (`https://json-schema.org/draft/2020-12/schema`) — are equally valid GTS Type Schemas. Authors who wish to use post-Draft-07 keywords (`$defs`, `prefixItems`, `unevaluatedProperties`, `unevaluatedItems`, `$dynamicRef`/`$dynamicAnchor`, `dependentRequired`, `dependentSchemas`, …) MAY do so, provided the dialect declared in `$schema` admits those keywords and the GTS-specific rules (derivation compatibility per OP#12, trait validation per OP#13, modifiers per §9.11) are satisfied.
 
